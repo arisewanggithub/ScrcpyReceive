@@ -216,6 +216,9 @@ The D-pad-friendly updater checks the latest stable release without interrupting
 an active cast. Downloads and installation require user actions. Unknown-source
 permission is app-scoped; installer cancellation/failure offers explicit retry,
 never automatic uninstall/reinstallation. See [UPDATES.md](UPDATES.md).
+Update dialog text uses the dialog theme's primary text color on both light and
+dark surfaces. Local Robolectric regressions enforce at least 4.5:1 text contrast
+and preserve single-tap activation, D-pad focus, and explicit update consent.
 
 CI supplies `releaseVersionCode=10000+github.run_number` and a version name
 from the stable tag without `v`, or `dev-<short-sha>` for main. Local defaults

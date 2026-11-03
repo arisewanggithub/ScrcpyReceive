@@ -176,7 +176,8 @@ class UpdateUi internal constructor(
         automaticPromptPending = false
         automaticDialog = automatic
         localNotice = null
-        val body = LinearLayout(activity).apply {
+        val builder = AlertDialog.Builder(activity).setTitle("App updates")
+        val body = LinearLayout(builder.context).apply {
             orientation = LinearLayout.VERTICAL
             val pad = (20 * activity.resources.displayMetrics.density).toInt()
             setPadding(pad, pad, pad, pad)
@@ -184,12 +185,12 @@ class UpdateUi internal constructor(
         details = text(body, "")
         val actionButton = button(body, "Download and install update", ::act).also { action = it }
         val cancelButton = button(body, "Later", ::later).also { cancel = it }
-        val scroll = ScrollView(activity).apply {
+        val scroll = ScrollView(builder.context).apply {
             descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
             isFocusable = false
             addView(body)
         }
-        val current = AlertDialog.Builder(activity).setTitle("App updates").setView(scroll).create()
+        val current = builder.setView(scroll).create()
         dialog = current
         current.setOnCancelListener {
             if (dialog === current) later()
@@ -326,13 +327,18 @@ class UpdateUi internal constructor(
         localNotice = "No Android package installer is available. Ask your device administrator to enable an installer; the verified download is retained."
         render()
     }
-    private fun text(parent: LinearLayout, value: String): TextView = TextView(activity).apply {
+    private fun text(parent: LinearLayout, value: String): TextView = TextView(parent.context).apply {
         text = value
-        setTextColor(Color.DKGRAY)
+        val colors = context.obtainStyledAttributes(intArrayOf(android.R.attr.textColorPrimary))
+        try {
+            setTextColor(requireNotNull(colors.getColorStateList(0)))
+        } finally {
+            colors.recycle()
+        }
         textSize = 16f
         parent.addView(this)
     }
-    private fun button(parent: LinearLayout, label: String, click: () -> Unit): Button = Button(activity).apply {
+    private fun button(parent: LinearLayout, label: String, click: () -> Unit): Button = Button(parent.context).apply {
         text = label
         setTextColor(Color.BLACK)
         isFocusable = true
