@@ -89,6 +89,19 @@ open class UpdateController protected constructor(
         installMessage()?.let { status = it }
     }
     fun available(): Boolean = release?.let { it.versionCode > installedCode } ?: false
+    open fun browserReleaseUrl(): String {
+        check(available()) { "No newer release is available" }
+        val url = apkUrl ?: throw IllegalStateException("Release download URL is unavailable")
+        return ReleasePolicy.repositoryReleasePage(url, repository, asset)
+    }
+    fun refreshVersion() {
+        if (!refreshInstalledVersion()) {
+            status = "Cannot read the installed app version. Restart the app and retry."
+            android.util.Log.e("ScrcpyAppUpdate", "operation=REFRESH_VERSION failed=PACKAGE_METADATA")
+        } else if (!available()) {
+            status = "Installed version is current."
+        }
+    }
     fun downloadReady(): Boolean = (verified || retained) && apk.isFile && available()
     fun installTargetVersion(): Long = prefs.getLong("install_target_version", 0)
     fun installPending(): Boolean = prefs.getString("install_outcome", "") == "pending"

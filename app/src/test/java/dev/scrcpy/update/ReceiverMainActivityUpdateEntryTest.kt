@@ -18,6 +18,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.ConscryptMode
@@ -57,6 +58,8 @@ class ReceiverMainActivityUpdateEntryTest {
         override fun cancel() { cancels++; busy = false; observer?.changed() }
         override fun download() { fail("Entry navigation must not download an APK") }
         override fun verifyForInstall(ready: () -> Unit) { fail("Entry navigation must not install an APK") }
+        override fun browserReleaseUrl(): String =
+            "https://github.com/arisewanggithub/ScrcpyReceive/releases/tag/v1.0.6"
         fun makeUpdateAvailable() {
             release = ReleasePolicy.Manifest("org.screencopy.receiver", "Fixture", "ScrcpyReceive.apk",
                 "a".repeat(64), "a".repeat(64), installedCode.toInt() + 1)
@@ -64,18 +67,13 @@ class ReceiverMainActivityUpdateEntryTest {
             observer?.changed()
         }
     }
-    private val installs = object : UpdateUi.InstallActions {
-        override fun allowed(): Boolean = false
-        override fun openSettings() { fail("Entry navigation must not open OEM settings") }
-        override fun install(intent: Intent, requestCode: Int) { fail("Entry navigation must not launch an installer") }
-    }
     @Before fun setup() {
         lifecycle = Robolectric.buildActivity(MainActivity::class.java)
         activity = lifecycle.get()
         activity.getSharedPreferences(storage, Activity.MODE_PRIVATE).edit().clear().commit()
         activity.updateUiFactoryForTests = { host, castActive ->
             backend = FakeBackend(requireNotNull(host.applicationContext), storage)
-            UpdateUi(host, backend, castActive, installs).also { ui = it }
+            UpdateUi(host, backend, castActive, downloadInBrowser = true).also { ui = it }
         }
         lifecycle.create()
         // Keep the real activity lifecycle and layout, but leave its video surface unavailable.
@@ -136,6 +134,18 @@ class ReceiverMainActivityUpdateEntryTest {
         assertFalse(activity.isFinishing)
         assertTrue(home().hasFocus())
         assertFalse(activity.receiverReadyForTests)
+    }
+    @Test fun receiverPopupHandsUpdateToBrowserAfterExplicitRemotePress() {
+        backend.makeUpdateAvailable()
+        ShadowLooper.idleMainLooper()
+        assertNull(Shadows.shadowOf(activity).nextStartedActivity)
+        key(KeyEvent.KEYCODE_DPAD_CENTER)
+        val intent = requireNotNull(Shadows.shadowOf(activity).nextStartedActivity)
+        assertEquals(Intent.ACTION_VIEW, intent.action)
+        assertTrue(intent.hasCategory(Intent.CATEGORY_BROWSABLE))
+        assertEquals("https://github.com/arisewanggithub/ScrcpyReceive/releases/tag/v1.0.6", intent.dataString)
+        assertNull(ui.dialogViewForTests())
+        assertFalse(activity.isFinishing)
     }
     @Test
     @Config(qualifiers = "w360dp-h800dp-port")

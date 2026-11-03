@@ -11,7 +11,30 @@ Buttons retain normal focus for D-pad/keyboard navigation but are not focusable
 in Android touch mode. Android switches between these input modes automatically,
 including when a remote and touchscreen are used on the same device.
 
-The popup has exactly two actions: **Download and install update** and **Later**. One explicit primary-action press downloads, verifies, and opens Android's installer when permitted and idle. The same primary button represents install permission or retry when needed. Later/Back also cancels an in-flight download. Consent survives rotation within the running process, never process restart or a fresh launch. Partial files are never installable. After a user-initiated installation attempt, the completed APK is retained across process restart but must be verified again on explicit retry.
+### Receiver browser downloads
+
+The receiver popup has exactly two actions: **Download in browser** and **Later**.
+Following PartialCast, the primary action opens the newer stable release's
+GitHub page with a browsable HTTPS intent, only after an explicit tap/remote
+press while foreground and idle. The page is derived from the validated APK
+asset URL and pinned to `arisewanggithub/ScrcpyReceive`; it is not an arbitrary
+URL or an unpinned latest-release redirect. Download **ScrcpyReceive.apk** on that
+page, then open the downloaded file to install it. The browser and Android handle
+download/install permissions and confirmations. The receiver does not download,
+checksum/signature-verify the browser's file, or launch the installer.
+
+Later/Back suppresses the prompt for that launch and never opens a browser.
+Opening the browser also handles the prompt; returning does not automatically
+open it again or imply a successful download/install. The installed version is
+reread on return. Missing or blocked browser activities leave the dialog open
+with a retryable error. Legacy in-app installer/permission state cannot cause an
+installer launch through this receiver flow. An active cast is never stopped
+to open the browser. Light/dark dialog contrast and single-tap/D-pad behavior
+are preserved.
+
+### Retained in-app download and installer flow
+
+Other callers retain the in-app updater. Its popup has exactly two actions: **Download and install update** and **Later**. One explicit primary-action press downloads, verifies, and opens Android's installer when permitted and idle. The same primary button represents install permission or retry when needed. Later/Back also cancels an in-flight download. Consent survives rotation within the running process, never process restart or a fresh launch. Partial files are never installable. After a user-initiated installation attempt, the completed APK is retained across process restart but must be verified again on explicit retry.
 
 Installing requires an idle cast; the updater never stops capture or playback. **Allow installs** opens Android's app-scoped permission settings. Returning with permission granted continues only the existing explicit request in that process; after process loss a new action is required. Android's installer and Play Protect confirmations remain under user control. This is not a root/Shizuku/silent installer. Missing OEM activities show actionable errors. No notification permission or browser is needed.
 
@@ -22,6 +45,8 @@ Sender Settings remains available before Shizuku is ready for manual update chec
 Installer launch requests a standard activity result (`EXTRA_RETURN_RESULT`, request code 7312). Only public `RESULT_OK`, `RESULT_CANCELED`, and `RESULT_FIRST_USER` outcomes are used; no hidden installer extras or reflection are needed. The private pending-attempt record and activity UI state survive recreation/process restore without automatically installing again. Android cancellation, rejection, and an unavailable/unconfirmed result show explicit status plus **Retry installation** and **Later**; Back dismisses without retrying. A launch or even `RESULT_OK` alone is never reported as success: the app rereads its actually installed version code and current signing certificate against the verified attempt's signer. Returning during an active cast updates status without opening a focus-stealing dialog. Retried launches still require fresh APK verification and a final idle-cast guard.
 
 A new check, download, or verification takes precedence over historical installer status. Completed installer outcomes are cleared before that operation, including cooldown/retry errors, while a genuinely pending installer record is preserved. Verification errors remove the invalid APK and show the fresh verification error rather than an old cancellation message. Retention messages check whether the APK actually exists; activity recreation cannot revive a cleared old outcome.
+
+### Receiver home focus
 
 The receiver initially focuses its passive home content, so the first remote OK cannot accidentally activate Exit. Down/Right deliberately selects Exit; Up/Left returns home. Back closes the update popup without closing the receiver. The landscape address/status composition remains intact.
 
@@ -62,7 +87,7 @@ signing certificate, version and update verification rules are unchanged.
 
 For the receiver use `org.screencopy.receiver` and `ScrcpyReceive.apk`. `protocolVersion:3` identifies wire compatibility, not an application release number; `schema:1` identifies the update manifest schema. Version codes must be positive integers no greater than 2147483647; names are not used for ordering. The placeholders above are documentation, not a valid manifest. Optional extra fields do not authorize protocol or signer changes.
 
-Assets initially belong to the pinned repository's GitHub release download path. HTTPS redirects are bounded and restricted to the literal hosts `github.com`, `api.github.com`, `objects.githubusercontent.com`, and `release-assets.githubusercontent.com`. APKs are bounded to 250 MiB. The app verifies SHA-256, archive application ID, archive version against the manifest, strictly newer version code, manifest signer fingerprint, and equality with the currently installed app's single current signer. It verifies again before granting the installer read access to the private APK through its narrowly scoped, non-exported FileProvider.
+Assets initially belong to the pinned repository's GitHub release download path. Metadata and in-app download HTTPS redirects are bounded and restricted to the literal hosts `github.com`, `api.github.com`, `objects.githubusercontent.com`, and `release-assets.githubusercontent.com`. In-app APK downloads are bounded to 250 MiB. The retained in-app updater verifies SHA-256, archive application ID, archive version against the manifest, strictly newer version code, manifest signer fingerprint, and equality with the currently installed app's single current signer. It verifies again before granting the installer read access to the private APK through its narrowly scoped, non-exported FileProvider. These file-verification and size limits do not apply to the receiver's external browser download; Android enforces installed-package signing compatibility.
 
 Different signing keys, missing signers, multi-signer packages, or certificate rotations are refused rather than uninstalling or risking data loss. A CI release cannot update a debug-key installation unless its signing certificate is the same. Publication therefore still requires manually configured permanent signing with the intended existing certificate; neither these apps nor their tests create or upload a signing key.
 
@@ -77,7 +102,7 @@ checks do not require binary publication approval.
 ### PR validation versus publication
 
 The workflow separates jobs by event. PRs alone run the full default/SRT JVM,
-lint, debug, remote UI (14 tests), optimized runtime and sender container suites.
+lint, debug, remote UI (15 tests), optimized runtime and sender container suites.
 After all checks pass, **Validated PR source proof** records the PR head and
 tested merge tree as a small 90-day Actions artifact. This is a required merge
 check alongside the four existing validation checks.

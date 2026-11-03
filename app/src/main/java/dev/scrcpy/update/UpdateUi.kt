@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -23,15 +24,20 @@ class UpdateUi internal constructor(
     private val activity: Activity,
     private val controller: UpdateController,
     private val casting: () -> Boolean,
-    private val installs: InstallActions
+    private val installs: InstallActions,
+    private val browser: BrowserActions? = null
 ) {
     companion object { const val INSTALL_REQUEST = 7312 }
+    internal fun interface BrowserActions {
+        fun open(intent: Intent)
+    }
     internal interface InstallActions {
         fun allowed(): Boolean
         fun openSettings()
         fun install(intent: Intent, requestCode: Int)
     }
-    constructor(activity: Activity, controller: UpdateController, casting: () -> Boolean) :
+    constructor(activity: Activity, controller: UpdateController, casting: () -> Boolean,
+        downloadInBrowser: Boolean = false) :
         this(activity, controller, casting, object : InstallActions {
             override fun allowed(): Boolean = Build.VERSION.SDK_INT < 26 || activity.packageManager.canRequestPackageInstalls()
             override fun openSettings() {
@@ -39,7 +45,7 @@ class UpdateUi internal constructor(
             }
             @Suppress("DEPRECATION")
             override fun install(intent: Intent, requestCode: Int) { activity.startActivityForResult(intent, requestCode) }
-        })
+        }, if (downloadInBrowser) BrowserActions { activity.startActivity(it) } else null)
 
     private var check: Button? = null
     private var update: Button? = null
@@ -89,16 +95,16 @@ class UpdateUi internal constructor(
     }
     fun start() {
         visible = true
-        installing = controller.installPending()
-        if (!launchCheckStarted) controller.finishUpdateRequested = false
+        installing = browser == null && controller.installPending()
+        if (browser != null || !launchCheckStarted) controller.finishUpdateRequested = false
         controller.attach { render() }
         if (!launchCheckStarted) {
             launchCheckStarted = true
             automaticPromptPending = true
-            controller.foregroundCheck()
+            if (browser != null) controller.check() else controller.foregroundCheck()
             render()
         }
-        if (awaitingPermission) {
+        if (browser == null && awaitingPermission) {
             awaitingPermission = false
             val continueInstall = controller.finishUpdateRequested && allowed() && !casting()
             controller.finishUpdateRequested = false
@@ -110,20 +116,27 @@ class UpdateUi internal constructor(
         }
     }
     fun saveState(): Bundle = Bundle().apply {
-        putBoolean("awaiting_permission", awaitingPermission)
-        putBoolean("reopen", dialog != null && !automaticDialog || controller.installPending())
+        putBoolean("awaiting_permission", browser == null && awaitingPermission)
+        putBoolean("reopen", dialog != null && !automaticDialog || browser == null && controller.installPending())
         putBoolean("launch_check_started", launchCheckStarted)
         putBoolean("automatic_prompt_pending", automaticPromptPending || automaticDialog)
     }
     fun restoreState(state: Bundle?) {
         if (state == null) return
-        awaitingPermission = state.getBoolean("awaiting_permission")
+        awaitingPermission = browser == null && state.getBoolean("awaiting_permission")
         reopen = state.getBoolean("reopen")
         launchCheckStarted = state.getBoolean("launch_check_started")
         automaticPromptPending = state.getBoolean("automatic_prompt_pending")
-        installing = controller.installPending()
+        installing = browser == null && controller.installPending()
     }
     fun resume() {
+        if (browser != null) {
+            controller.refreshVersion()
+            if (!controller.available()) { reopen = false; close() }
+            else if (reopen && visible && !casting()) { reopen = false; show() }
+            render()
+            return
+        }
         val returning = controller.installPending()
         if (returning) controller.reconcileInstall(null)
         installing = controller.installPending()
@@ -136,6 +149,7 @@ class UpdateUi internal constructor(
         render()
     }
     fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
+        if (browser != null) return false
         if (requestCode != INSTALL_REQUEST) return false
         if (controller.installTargetVersion() > 0) {
             controller.reconcileInstall(resultCode)
@@ -220,7 +234,7 @@ class UpdateUi internal constructor(
     internal fun dialogViewForTests(): View? = dialog?.window?.decorView
     private fun render() {
         if (!visible) return
-        val message = controller.displayStatus()
+        val message = if (browser != null) controller.status else controller.displayStatus()
         status?.text = message
         update?.visibility = if (controller.available()) View.VISIBLE else View.GONE
         wireHomeFocus()
@@ -231,9 +245,10 @@ class UpdateUi internal constructor(
             dialog = null
         }
         if (dialog == null && automaticPromptPending && controller.checkSucceeded &&
-            controller.available() && !controller.busy && !controller.installPending() &&
-            !controller.installNeedsRetry() && !casting()) show(automatic = true)
-        if (controller.finishUpdateRequested && !controller.busy && !awaitingPermission) {
+            controller.available() && !controller.busy &&
+            (browser != null || !controller.installPending() && !controller.installNeedsRetry()) &&
+            !casting()) show(automatic = true)
+        if (browser == null && controller.finishUpdateRequested && !controller.busy && !awaitingPermission) {
             controller.finishUpdateRequested = false
             if (controller.downloadReady()) act()
         }
@@ -244,10 +259,15 @@ class UpdateUi internal constructor(
             "\nDownloaded ${controller.downloaded / 1024} KiB" +
                 (if (controller.total > 0) " of ${controller.total / 1024} KiB" else "")
             else ""
-        details?.text = versions + (localNotice ?: message) + progress +
-            "\nStable GitHub release · protocol 3 · APK checksum and installed signing key verified before install." +
-            "\nYour projector's Android installer may require its own confirmation. No browser or notification is needed."
-        action?.text = if (controller.downloadReady()) {
+        details?.text = versions + (localNotice ?: message) + if (browser != null) {
+            "\nOpen the stable GitHub release page in your browser and download ScrcpyReceive.apk." +
+                "\nThen open the downloaded APK to update. Your browser and Android handle download and install permissions and confirmations." +
+                "\nThe receiver does not download or verify the browser's APK, or start its installer."
+        } else {
+            progress + "\nStable GitHub release · protocol 3 · APK checksum and installed signing key verified before install." +
+                "\nYour projector's Android installer may require its own confirmation. No browser or notification is needed."
+        }
+        action?.text = if (browser != null) "Download in browser" else if (controller.downloadReady()) {
             if (allowed()) {
                 if (controller.installNeedsRetry()) "Retry installation" else "Install update"
             } else "Allow installs"
@@ -257,6 +277,10 @@ class UpdateUi internal constructor(
     }
     private fun act() {
         localNotice = null
+        if (browser != null) {
+            openInBrowser(browser)
+            return
+        }
         if (installing || controller.installPending()) return
         if (!controller.downloadReady()) {
             controller.finishUpdateRequested = true
@@ -314,6 +338,45 @@ class UpdateUi internal constructor(
                 render()
             }
         }
+    }
+    private fun openInBrowser(browser: BrowserActions) {
+        if (!visible || dialog?.isShowing != true || activity.isFinishing || activity.isDestroyed) {
+            Log.w("ScrcpyAppUpdate", "operation=BROWSER_OPEN deferred=NOT_FOREGROUND")
+            return
+        }
+        if (casting()) {
+            localNotice = "Stop casting before opening the update browser. This updater will not stop an active cast."
+            Log.w("ScrcpyAppUpdate", "operation=BROWSER_OPEN deferred=ACTIVE_CAST")
+            render()
+            return
+        }
+        if (!controller.available() || controller.busy) {
+            localNotice = "Wait for a successful check for a newer release, then retry."
+            Log.w("ScrcpyAppUpdate", "operation=BROWSER_OPEN deferred=RELEASE_NOT_READY")
+            render()
+            return
+        }
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(controller.browserReleaseUrl()))
+                .addCategory(Intent.CATEGORY_BROWSABLE)
+            browser.open(intent)
+            controller.finishUpdateRequested = false
+            reopen = false
+            close()
+        } catch (e: ActivityNotFoundException) {
+            browserFailure("No browser is available. Install or enable a browser, then choose Download in browser again.", e)
+        } catch (e: SecurityException) {
+            browserFailure("Android blocked opening the browser. Check your device's browser restrictions, then retry.", e)
+        } catch (e: IllegalArgumentException) {
+            browserFailure("The release link could not be validated. Check for updates again before downloading.", e)
+        } catch (e: IllegalStateException) {
+            browserFailure("The release link is unavailable. Check for updates again before downloading.", e)
+        }
+    }
+    private fun browserFailure(message: String, error: Exception) {
+        localNotice = message
+        Log.e("ScrcpyAppUpdate", "operation=BROWSER_OPEN failed=${error.javaClass.simpleName}", error)
+        render()
     }
     private fun missingSettings() {
         awaitingPermission = false

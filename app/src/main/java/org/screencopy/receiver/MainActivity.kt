@@ -91,7 +91,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         updates = updateUiFactoryForTests?.invoke(this, castActive) ?: dev.scrcpy.update.UpdateUi(this,
             dev.scrcpy.update.UpdateController.get(this, "ScrcpyReceive", "ScrcpyReceive.apk"),
-            castActive)
+            castActive, downloadInBrowser = true)
         updates.restoreState(savedInstanceState?.getBundle("app_update_ui"))
         bindHome()
         surface.holder.addCallback(this)
