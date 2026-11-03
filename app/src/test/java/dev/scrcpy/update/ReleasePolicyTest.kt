@@ -67,6 +67,28 @@ class ReleasePolicyTest {
         assertThrows(Exception::class.java) { ReleasePolicy.parse("not json", id, assetName) }
         assertThrows(Exception::class.java) { ReleasePolicy.parse(" ".repeat(65537), id, assetName) }
     }
+    @Test fun browserReleasePageIsPinnedToTheStableReceiverApk() {
+        val base = "https://github.com/arisewanggithub/ScrcpyReceive/releases/download/"
+        val asset = "ScrcpyReceive.apk"
+        assertEquals("https://github.com/arisewanggithub/ScrcpyReceive/releases/tag/v1.0.6",
+            ReleasePolicy.repositoryReleasePage("${base}v1.0.6/$asset", "ScrcpyReceive", asset))
+        for (url in listOf(
+            "${base}v1.0.6/ScrcpySend.apk",
+            "${base}v1.0.6/$asset?redirect=elsewhere",
+            "${base}v1.0.6/$asset#fragment",
+            "${base}v1.0.6/../v1.0.5/$asset",
+            "${base}v1.0.6%2Fother/$asset",
+            "${base}v1.0.6-beta/$asset",
+            "${base}main/$asset",
+            "${base}v1.0.6/$asset".replace("ScrcpyReceive/releases", "ScrcpySend/releases"),
+            "${base}v1.0.6/$asset".replace("github.com", "api.github.com"),
+            "${base}v1.0.6/$asset".replace("https:", "http:")
+        )) {
+            assertThrows(IllegalArgumentException::class.java) {
+                ReleasePolicy.repositoryReleasePage(url, "ScrcpyReceive", asset)
+            }
+        }
+    }
     @Test fun trustedHostsAreExactHttpsOnly() {
         for (host in listOf("github.com", "api.github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"))
             assertEquals("https://$host/asset", ReleasePolicy.trustedUrl("https://$host/asset"))

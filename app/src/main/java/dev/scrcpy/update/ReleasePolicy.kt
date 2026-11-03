@@ -86,6 +86,19 @@ object ReleasePolicy {
         return value
     }
 
+    fun repositoryReleasePage(apkUrl: String, repository: String, asset: String): String {
+        val uri = URI.create(trustedUrl(apkUrl))
+        val prefix = "/arisewanggithub/$repository/releases/download/"
+        val path = uri.rawPath.orEmpty()
+        require(uri.host == "github.com" && uri.rawQuery == null && path.startsWith(prefix) &&
+            path.endsWith("/$asset")) { "Release asset is outside the configured repository" }
+        val tag = path.removePrefix(prefix).removeSuffix("/$asset")
+        require(tag.length <= 80 && tag.matches(Regex("v[0-9]+\\.[0-9]+\\.[0-9]+"))) {
+            "Invalid stable release tag"
+        }
+        return "https://github.com/arisewanggithub/$repository/releases/tag/$tag"
+    }
+
     fun verifyIdentity(manifest: Manifest, packageId: String, archiveCode: Long, installedCode: Long,
         archiveSigners: Set<String>, installedSigners: Set<String>) {
         require(manifest.applicationId == packageId && archiveCode == manifest.versionCode.toLong() &&

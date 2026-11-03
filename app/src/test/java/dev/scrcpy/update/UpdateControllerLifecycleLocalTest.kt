@@ -1,5 +1,6 @@
 package dev.scrcpy.update
 
+import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -24,6 +25,27 @@ import java.util.concurrent.atomic.AtomicInteger
 @GraphicsMode(GraphicsMode.Mode.LEGACY)
 @LooperMode(LooperMode.Mode.PAUSED)
 class UpdateControllerLifecycleLocalTest {
+    @Test fun browserLinkUsesValidatedCachedAssetAndRequiresANewerVersion() {
+        val context = RuntimeEnvironment.getApplication()
+        val storage = "update_test_browser_cache"
+        val manifest = JSONObject().put("schema", 1).put("protocolVersion", 3)
+            .put("applicationId", context.packageName).put("versionCode", 20000)
+            .put("versionName", "1.0.6").put("apkAssetName", "ScrcpyReceive.apk")
+            .put("sha256", "a".repeat(64)).put("signingCertificateSha256", "b".repeat(64))
+        val prefs = context.getSharedPreferences(storage, 0)
+        prefs.edit().clear().putString("manifest", manifest.toString())
+            .putString("apk_url", "https://github.com/arisewanggithub/ScrcpyReceive/releases/download/v1.0.6/ScrcpyReceive.apk")
+            .commit()
+        val controller = object : UpdateController(context, "ScrcpyReceive", "ScrcpyReceive.apk", storage) {}
+        assertEquals("https://github.com/arisewanggithub/ScrcpyReceive/releases/tag/v1.0.6",
+            controller.browserReleaseUrl())
+        controller.installedCode = 20000
+        assertThrows(IllegalStateException::class.java) { controller.browserReleaseUrl() }
+        prefs.edit().putString("apk_url", "https://github.com/arisewanggithub/ScrcpySend/releases/download/v1.0.6/ScrcpyReceive.apk").commit()
+        val wrongRepository = object : UpdateController(context, "ScrcpyReceive", "ScrcpyReceive.apk", storage) {}
+        assertThrows(IllegalArgumentException::class.java) { wrongRepository.browserReleaseUrl() }
+        prefs.edit().clear().commit()
+    }
     @Test fun recreationRetainsWorkerThenNormalStopCancelsAndDropsStaleUiCallbacks() {
         val reading = CountDownLatch(1)
         val unblock = CountDownLatch(1)

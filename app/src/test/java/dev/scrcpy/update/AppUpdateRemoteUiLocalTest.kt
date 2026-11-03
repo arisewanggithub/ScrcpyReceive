@@ -57,6 +57,7 @@ class AppUpdateRemoteUiLocalTest {
         var automatic = false
         var pendingCheck = false
         var checkFailure = false
+        var browserApkUrl = "https://github.com/arisewanggithub/ScrcpyReceive/releases/download/v1.0.6/ScrcpyReceive.apk"
         init {
             val hash = "a".repeat(64)
             release = ReleasePolicy.Manifest(activity.packageName, "Fixture", "ScrcpyReceive.apk", hash, hash, installedCode.toInt() + 1)
@@ -86,6 +87,8 @@ class AppUpdateRemoteUiLocalTest {
         override fun verifyForInstall(ready: () -> Unit) { clearCompletedInstallOutcome(); verified = true; ready() }
         override fun refreshInstalledVersion(): Boolean { installedCode = reportedVersion; return true }
         override fun installedSignerMatches(expected: String): Boolean = signerMatches && expected == release?.signingCertificateSha256
+        override fun browserReleaseUrl(): String =
+            ReleasePolicy.repositoryReleasePage(browserApkUrl, "ScrcpyReceive", "ScrcpyReceive.apk")
     }
     private inner class FakeInstalls : UpdateUi.InstallActions {
         var allowed = false
@@ -357,6 +360,154 @@ class AppUpdateRemoteUiLocalTest {
         center(check)
         assertEquals(initialChecks + 3, backend.checks)
         assertTrue(find(ui.dialogViewForTests(), "Download and install").hasFocus())
+    }
+    private fun startBrowserUi(openBrowser: (Intent) -> Unit = { activity.startActivity(it) }) {
+        ui.stop()
+        activity.content.removeAllViews()
+        ui = UpdateUi(activity, backend, { casting }, installs, UpdateUi.BrowserActions(openBrowser))
+        activity.updatesForTests = ui
+        ui.mount(activity.content)
+        ui.start()
+        ShadowLooper.idleMainLooper()
+    }
+    private fun assertBrowserDialogTheme(theme: Int) {
+        activity.setTheme(theme)
+        startBrowserUi()
+        val root = requireNotNull(ui.dialogViewForTests())
+        val body = requireNotNull(findText(root, "Current:"))
+        val colors = body.context.obtainStyledAttributes(intArrayOf(android.R.attr.colorBackgroundFloating))
+        try {
+            assertContrast(body.currentTextColor, colors.getColor(0, Color.TRANSPARENT))
+        } finally { colors.recycle() }
+        assertTrue(body.text.toString().contains("does not download or verify"))
+        assertFalse(body.text.toString().contains("verified before install"))
+        assertEquals(2, countButtons(root))
+        assertTrue(find(root, "Download in browser").hasFocus())
+        assertSame(find(root, "Later"), find(root, "Download in browser").focusSearch(View.FOCUS_DOWN))
+        assertNull(Shadows.shadowOf(activity).nextStartedActivity)
+        val window = checkNotNull(ShadowAlertDialog.getLatestAlertDialog().window)
+        tap(window, "Download in browser")
+        val intent = requireNotNull(Shadows.shadowOf(activity).nextStartedActivity)
+        assertEquals(Intent.ACTION_VIEW, intent.action)
+        assertEquals("https://github.com/arisewanggithub/ScrcpyReceive/releases/tag/v1.0.6", intent.dataString)
+        assertTrue(intent.hasCategory(Intent.CATEGORY_BROWSABLE))
+        assertNull(intent.clipData)
+        assertEquals(0, intent.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        assertEquals(0, backend.downloads)
+        assertEquals(0, installs.settings)
+        assertEquals(0, installs.installs)
+        assertFalse(backend.finishUpdateRequested)
+        assertNull(ui.dialogViewForTests())
+        ui.resume(); ui.refresh()
+        assertNull(ui.dialogViewForTests())
+        assertNull(Shadows.shadowOf(activity).nextStartedActivity)
+    }
+    @Test @Config(qualifiers = "notnight")
+    fun lightBrowserDialogKeepsContrastAndDownloadsOnlyAfterOneTap() {
+        assertBrowserDialogTheme(android.R.style.Theme_Material_Light_NoActionBar)
+    }
+    @Test @Config(qualifiers = "night")
+    fun darkBrowserDialogKeepsContrastAndDownloadsOnlyAfterOneTap() {
+        assertBrowserDialogTheme(R.style.ReceiverTheme)
+    }
+    @Test fun remoteBrowserActionIsExplicitAndCannotRepeatAfterDismissal() {
+        var opens = 0
+        startBrowserUi { opens++ }
+        val action = find(ui.dialogViewForTests(), "Download in browser")
+        assertEquals(0, opens)
+        center(action)
+        assertEquals(1, opens)
+        action.performClick()
+        ui.resume(); ui.refresh(); ui.stop(); ui.start()
+        assertEquals(1, opens)
+        assertEquals(1, backend.checks)
+        assertNull(ui.dialogViewForTests())
+    }
+    @Test fun laterAndBackNeverLaunchBrowserOrKeepConsent() {
+        var opens = 0
+        startBrowserUi { opens++ }
+        center(find(ui.dialogViewForTests(), "Later"))
+        ui.resume(); ui.refresh()
+        assertNull(ui.dialogViewForTests())
+        open()
+        val root = requireNotNull(ui.dialogViewForTests())
+        root.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK))
+        root.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK))
+        ShadowLooper.idleMainLooper()
+        assertNull(ui.dialogViewForTests())
+        assertEquals(0, opens)
+        assertEquals(0, backend.downloads)
+        assertFalse(backend.finishUpdateRequested)
+    }
+    @Test fun missingOrBlockedBrowserShowsActionableErrorAndAllowsRetry() {
+        var failure: RuntimeException? = ActivityNotFoundException()
+        var opens = 0
+        startBrowserUi {
+            failure?.let { throw it }
+            opens++
+        }
+        center(find(ui.dialogViewForTests(), "Download in browser"))
+        assertTrue(hasText(ui.dialogViewForTests(), "No browser is available"))
+        failure = SecurityException()
+        center(find(ui.dialogViewForTests(), "Download in browser"))
+        assertTrue(hasText(ui.dialogViewForTests(), "Android blocked"))
+        assertEquals(0, opens)
+        assertEquals(0, installs.installs)
+        failure = null
+        center(find(ui.dialogViewForTests(), "Download in browser"))
+        assertEquals(1, opens)
+        assertNull(ui.dialogViewForTests())
+    }
+    @Test fun invalidBrowserLinkIsNotLaunched() {
+        var opens = 0
+        backend.browserApkUrl = "https://github.com/arisewanggithub/ScrcpySend/releases/download/v1.0.6/ScrcpyReceive.apk"
+        startBrowserUi { opens++ }
+        center(find(ui.dialogViewForTests(), "Download in browser"))
+        assertTrue(hasText(ui.dialogViewForTests(), "release link could not be validated"))
+        assertEquals(0, opens)
+    }
+    @Test fun browserLaunchWaitsForIdleAndRejectsStoppedUi() {
+        var opens = 0
+        casting = true
+        startBrowserUi { opens++ }
+        assertNull(ui.dialogViewForTests())
+        casting = false
+        ui.refresh()
+        val action = find(ui.dialogViewForTests(), "Download in browser")
+        casting = true
+        center(action)
+        assertEquals(0, opens)
+        casting = false
+        ui.refresh()
+        val replacementAction = find(ui.dialogViewForTests(), "Download in browser")
+        ui.stop()
+        replacementAction.performClick()
+        assertEquals(0, opens)
+        assertEquals(0, installs.installs)
+    }
+    @Test fun browserReturnRefreshesInstalledVersionWithoutInstallerOutcome() {
+        startBrowserUi()
+        center(find(ui.dialogViewForTests(), "Download in browser"))
+        backend.reportedVersion = requireNotNull(backend.release).versionCode.toLong()
+        ui.resume()
+        assertFalse(backend.available())
+        assertNull(ui.dialogViewForTests())
+        assertEquals(0, installs.installs)
+        assertEquals("Installed version is current.", backend.status)
+    }
+    @Test fun legacyPermissionAndPendingInstallerDoNotBlockOrResumeBrowserUpdates() {
+        backend.beginInstall()
+        backend.finishUpdateRequested = true
+        startBrowserUi()
+        assertEquals(1, backend.checks)
+        assertNotNull(ui.dialogViewForTests())
+        assertFalse(hasText(ui.dialogViewForTests(), "Waiting for Android installer"))
+        assertFalse(backend.finishUpdateRequested)
+        assertFalse(ui.onActivityResult(UpdateUi.INSTALL_REQUEST, Activity.RESULT_OK, null))
+        center(find(ui.dialogViewForTests(), "Download in browser"))
+        assertEquals(0, installs.settings)
+        assertEquals(0, installs.installs)
+        assertEquals(0, backend.downloads)
     }
     @Test fun nativeCenterFocusNavigationAndDownloadCancel() {
         open()

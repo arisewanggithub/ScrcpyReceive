@@ -83,6 +83,8 @@ class AppUpdateRemoteUiTest {
         }
         override fun refreshInstalledVersion(): Boolean { installedCode = reportedVersion; return true }
         override fun installedSignerMatches(expected: String): Boolean = expected == release?.signingCertificateSha256
+        override fun browserReleaseUrl(): String =
+            "https://github.com/arisewanggithub/ScrcpyReceive/releases/tag/v1.0.6"
     }
     private class FakeInstalls : UpdateUi.InstallActions {
         var allowed = false
@@ -477,6 +479,53 @@ class AppUpdateRemoteUiTest {
         instrumentation.runOnMainSync { ui.focusCheck() }
         awaitUi("D-pad focus restored after touch") {
             !activity.window.decorView.isInTouchMode && button(activity.content, "Check for updates").hasFocus()
+        }
+    }
+    @Test fun receiverBrowserActionHandlesMissingBrowserAndOneTouchRetry() {
+        var missingBrowser = true
+        var opens = 0
+        var browserIntent: Intent? = null
+        instrumentation.runOnMainSync {
+            ui.stop()
+            activity.content.removeAllViews()
+            ui = UpdateUi(activity, backend, { casting }, installs, UpdateUi.BrowserActions {
+                if (missingBrowser) throw ActivityNotFoundException()
+                opens++
+                browserIntent = it
+            })
+            activity.updatesForTests = ui
+            ui.mount(activity.content)
+            ui.start()
+            ui.focusCheck()
+        }
+        awaitWindow("browser updater host")
+        center()
+        awaitFocused("Download in browser")
+        instrumentation.runOnMainSync {
+            assertEquals(0, opens)
+            assertEquals(2, countButtons(requireNotNull(ui.dialogViewForTests())))
+        }
+        center()
+        instrumentation.runOnMainSync {
+            assertTrue(containsText(ui.dialogViewForTests(), "No browser is available"))
+            assertEquals(0, opens)
+            missingBrowser = false
+        }
+        tap("Download in browser")
+        instrumentation.runOnMainSync {
+            assertEquals(1, opens)
+            val intent = requireNotNull(browserIntent)
+            assertEquals(Intent.ACTION_VIEW, intent.action)
+            assertTrue(intent.hasCategory(Intent.CATEGORY_BROWSABLE))
+            assertEquals("https://github.com/arisewanggithub/ScrcpyReceive/releases/tag/v1.0.6", intent.dataString)
+            assertNull(ui.dialogViewForTests())
+            assertEquals(0, backend.downloads)
+            assertEquals(0, installs.settingsOpened)
+            assertEquals(0, installs.installed)
+            assertFalse(backend.finishUpdateRequested)
+            ui.resume(); ui.refresh()
+            assertEquals(1, opens)
+            assertNull(ui.dialogViewForTests())
         }
     }
     @Test fun installedVersionIsVisibleOnTheActualHomeScreen() {
