@@ -3,6 +3,8 @@ package dev.scrcpy.update
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -13,6 +15,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.TextView
 import org.json.JSONObject
+import org.screencopy.receiver.R
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -29,6 +32,7 @@ import org.robolectric.annotation.LooperMode
 import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowAlertDialog
 import java.security.MessageDigest
+import kotlin.math.pow
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -131,6 +135,87 @@ class AppUpdateRemoteUiLocalTest {
             if (hasText(view.getChildAt(i), expected)) return true
         }
         return false
+    }
+    private fun findText(view: View?, prefix: String): TextView? {
+        if (view is TextView && view.text.toString().startsWith(prefix)) return view
+        if (view is ViewGroup) for (i in 0 until view.childCount) {
+            findText(view.getChildAt(i), prefix)?.let { return it }
+        }
+        return null
+    }
+    private fun luminance(color: Int): Double {
+        fun linear(channel: Int): Double {
+            val value = channel / 255.0
+            return if (value <= 0.04045) value / 12.92 else ((value + 0.055) / 1.055).pow(2.4)
+        }
+        return 0.2126 * linear(Color.red(color)) + 0.7152 * linear(Color.green(color)) +
+            0.0722 * linear(Color.blue(color))
+    }
+    private fun assertContrast(foreground: Int, background: Int) {
+        assertEquals("Surface must be opaque", 255, Color.alpha(background))
+        val alpha = Color.alpha(foreground)
+        fun composite(front: Int, back: Int): Int = (front * alpha + back * (255 - alpha)) / 255
+        val renderedText = Color.rgb(composite(Color.red(foreground), Color.red(background)),
+            composite(Color.green(foreground), Color.green(background)),
+            composite(Color.blue(foreground), Color.blue(background)))
+        val first = luminance(renderedText)
+        val second = luminance(background)
+        val ratio = (maxOf(first, second) + 0.05) / (minOf(first, second) + 0.05)
+        assertTrue("Normal text contrast $ratio must be at least 4.5:1", ratio >= 4.5)
+    }
+    private fun assertDialogTheme(theme: Int, dark: Boolean) {
+        activity.setTheme(theme)
+        open()
+        val root = requireNotNull(ui.dialogViewForTests())
+        val body = requireNotNull(findText(root, "Current:"))
+        val colors = body.context.obtainStyledAttributes(
+            intArrayOf(android.R.attr.textColorPrimary, android.R.attr.colorBackgroundFloating))
+        val surface: Int
+        try {
+            assertEquals(requireNotNull(colors.getColorStateList(0)), body.textColors)
+            surface = colors.getColor(1, Color.TRANSPARENT)
+        } finally {
+            colors.recycle()
+        }
+        assertEquals(dark, luminance(surface) < 0.5)
+        assertContrast(body.currentTextColor, surface)
+        assertContrast(requireNotNull(findText(root, "App updates")).currentTextColor, surface)
+        assertTrue(body.text.toString().contains("APK checksum and installed signing key verified"))
+        assertEquals(0, backend.downloads)
+        assertEquals(0, installs.installs)
+        val action = find(root, "Download and install")
+        val later = find(root, "Later")
+        assertTrue(action.hasFocus())
+        assertSame(later, action.focusSearch(View.FOCUS_DOWN))
+        for (button in listOf(action, later)) {
+            assertTrue(button.requestFocus())
+            assertContrast(button.currentTextColor,
+                requireNotNull((button.background.current as GradientDrawable).color).defaultColor)
+            button.clearFocus()
+            assertContrast(button.currentTextColor,
+                requireNotNull((button.background.current as GradientDrawable).color).defaultColor)
+            button.isPressed = true
+            assertContrast(button.currentTextColor,
+                requireNotNull((button.background.current as GradientDrawable).color).defaultColor)
+            button.isPressed = false
+        }
+        backend.status = "Update check/download failed. Check internet access and retry."
+        backend.emit()
+        assertTrue(body.text.toString().contains("failed"))
+        assertContrast(body.currentTextColor, surface)
+        center(later)
+        assertNull(ui.dialogViewForTests())
+        assertFalse(backend.finishUpdateRequested)
+        assertEquals(0, installs.installs)
+        assertSingleTouchTapActivatesAndRemoteFocusCanResume()
+    }
+    @Test @Config(qualifiers = "notnight")
+    fun lightDialogTextHasAccessibleContrastAndPreservesInput() {
+        assertDialogTheme(android.R.style.Theme_Material_Light_NoActionBar, dark = false)
+    }
+    @Test @Config(qualifiers = "night")
+    fun receiverDarkDialogTextHasAccessibleContrastAndPreservesInput() {
+        assertDialogTheme(R.style.ReceiverTheme, dark = true)
     }
     private fun center(button: Button) {
         assertTrue(button.requestFocus())
@@ -246,13 +331,17 @@ class AppUpdateRemoteUiLocalTest {
         ShadowLooper.idleMainLooper()
     }
     @Test fun nativeSingleTouchTapActivatesAndRemoteFocusCanResume() {
+        assertSingleTouchTapActivatesAndRemoteFocusCanResume()
+    }
+    private fun assertSingleTouchTapActivatesAndRemoteFocusCanResume() {
+        val initialChecks = backend.checks
         tap(activity.window, "Check")
-        assertEquals(1, backend.checks)
+        assertEquals(initialChecks + 1, backend.checks)
         tap(checkNotNull(ShadowAlertDialog.getLatestAlertDialog().window), "Later")
         assertNull(ui.dialogViewForTests())
         assertEquals(0, backend.downloads)
         tap(activity.window, "Check")
-        assertEquals(2, backend.checks)
+        assertEquals(initialChecks + 2, backend.checks)
         val dialog = checkNotNull(ShadowAlertDialog.getLatestAlertDialog().window)
         tap(dialog, "Download and install")
         assertEquals(1, backend.downloads)
@@ -266,7 +355,7 @@ class AppUpdateRemoteUiLocalTest {
         ui.focusCheck()
         assertTrue(check.hasFocus())
         center(check)
-        assertEquals(3, backend.checks)
+        assertEquals(initialChecks + 3, backend.checks)
         assertTrue(find(ui.dialogViewForTests(), "Download and install").hasFocus())
     }
     @Test fun nativeCenterFocusNavigationAndDownloadCancel() {
