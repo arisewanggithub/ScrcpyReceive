@@ -49,7 +49,7 @@ class UpdateControllerLifecycleLocalTest {
             }
         }
         val context = RuntimeEnvironment.getApplication()
-        val controller = object : UpdateController(context, "ScrcpyRecv", "ScrcpyRecv.apk") {
+        val controller = object : UpdateController(context, "ScrcpyRecv", "ScrcpyReceive.apk") {
             override fun newClient(): ReleaseClient = ReleaseClient { connection }
         }
         val callbacks = AtomicInteger()
@@ -76,7 +76,7 @@ class UpdateControllerLifecycleLocalTest {
             .putLong("last_success", System.currentTimeMillis())
             .putLong("last_attempt", System.currentTimeMillis()).commit()
         var checks = 0
-        val controller = object : UpdateController(context, "ScrcpyRecv", "ScrcpyRecv.apk", storage) {
+        val controller = object : UpdateController(context, "ScrcpyRecv", "ScrcpyReceive.apk", storage) {
             override fun check() { checks++ }
         }
         controller.foregroundCheck()

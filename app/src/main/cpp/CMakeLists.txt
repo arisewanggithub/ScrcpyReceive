@@ -24,7 +24,7 @@ target_compile_features(screencopy_opus PRIVATE cxx_std_17)
 target_compile_options(screencopy_opus PRIVATE -Wall -Wextra -Werror)
 target_link_options(screencopy_opus PRIVATE "-Wl,-z,max-page-size=16384")
 
-option(SRT_TRIAL "Build the SRT transport trial" OFF)
+option(SRT_TRIAL "Build the SRT transport" ON)
 if(SRT_TRIAL)
     set(SRT_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/srt-1.5.7.tar.gz")
     file(SHA256 "${SRT_ARCHIVE}" SRT_SHA256)

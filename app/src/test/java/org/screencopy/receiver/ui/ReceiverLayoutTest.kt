@@ -35,7 +35,18 @@ class ReceiverLayoutTest {
         }
     }
 
-    @Test fun exitIsTheOnlyHomeActionAndNormalTextOmitsPortsAndRemovedControls() {
+    @Test fun appLabelAndHomeBrandUseScrcpyReceive() {
+        val strings = xml("res/values/strings.xml").getElementsByTagName("string")
+        val texts = (0 until strings.length).map { strings.item(it) as Element }
+            .associate { it.getAttribute("name") to it.textContent }
+        assertEquals("ScrcpyReceive", texts["app_name"])
+        assertEquals("SCRCPYRECEIVE", texts["brand"])
+        assertEquals("RECEIVER IP ADDRESS:PORT", texts["receiver_ip"])
+        val application = xml("AndroidManifest.xml").getElementsByTagName("application").item(0) as Element
+        assertEquals("@string/app_name", application.getAttributeNS(android, "label"))
+    }
+
+    @Test fun exitIsTheOnlyHomeActionAndNormalTextOmitsRemovedControls() {
         val layout = xml("res/layout/receiver_details.xml")
         val buttons = layout.getElementsByTagName("Button")
         assertEquals(1, buttons.length)

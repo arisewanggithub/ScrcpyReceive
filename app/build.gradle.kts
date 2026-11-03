@@ -2,7 +2,7 @@ plugins {
     id("com.android.application")
 }
 
-val srtTrial = providers.gradleProperty("srtTrial").map { it.toBooleanStrict() }.getOrElse(false)
+val srtTrial = providers.gradleProperty("srtTrial").map { it.toBooleanStrict() }.getOrElse(true)
 val releaseSmokeTest = providers.gradleProperty("releaseSmokeTest").map { it.toBooleanStrict() }.getOrElse(false)
 val requireReleaseSigning = providers.gradleProperty("requireReleaseSigning").map { it.toBooleanStrict() }.getOrElse(false)
 val productionSigningConfigured = providers.gradleProperty("releaseSigningKeystorePath").isPresent ||

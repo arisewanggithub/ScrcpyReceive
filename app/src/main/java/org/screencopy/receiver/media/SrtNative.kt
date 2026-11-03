@@ -4,7 +4,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 object SrtNative {
     init {
-        check(org.screencopy.receiver.BuildConfig.SRT_TRIAL) { "SRT requires an SRT trial APK" }
+        check(org.screencopy.receiver.BuildConfig.SRT_TRIAL) { "SRT is disabled in this APK" }
         System.loadLibrary("screencopy_srt")
     }
 

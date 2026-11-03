@@ -21,6 +21,10 @@ foreach ($entry in $inventory.files) {
     Assert ($entry.path -notmatch '(^|/)(\.git|build|\.gradle|\.idea|\.vscode|\.copilot|node_modules)(/|$)|local\.properties$|\.(apk|jks|keystore)$') 'Forbidden snapshot path'
 }
 $workflow = Get-Content -LiteralPath (Join-Path $root '.github/workflows/build-release.yml') -Raw
+Assert ($workflow.Contains('-ApkAssetName ScrcpyReceive.apk')) 'Receiver manifest generation must use the renamed APK'
+Assert ($workflow.Contains('gh release upload "$RELEASE_TAG" publication-output/ScrcpyReceive.apk publication-output/update.json --clobber')) 'Receiver publication must upload only the renamed APK and updater manifest'
+$mainActivity = Get-Content -LiteralPath (Join-Path $root 'app/src/main/java/org/screencopy/receiver/MainActivity.kt') -Raw
+Assert ($mainActivity.Contains('UpdateController.get(this, "ScrcpyRecv", "ScrcpyReceive.apk")')) 'Receiver updater must retain the repository and use the renamed APK'
 & (Join-Path $PSScriptRoot 'pr-validation.ps1') -Mode SelfTest
 foreach ($job in @('checks', 'update-ui', 'optimized-native-smoke', 'record-validation')) {
     Assert ($workflow -match "(?m)^  ${job}:\r?\n    (?:name:[^\r\n]*\r?\n    )?if: github.event_name == 'pull_request'") 'Full validation and proof generation must run only on PRs'
@@ -155,7 +159,7 @@ try {
         Assert ((Get-Content (Join-Path $scratch 'diagnostics-fixture/exit-status.txt') -Raw).Trim() -eq "$expectedExit") 'Original exit status must be retained in artifacts'
     }
     $applicationId = if (Test-Path (Join-Path $root 'app/build.gradle')) { 'dev.screencopy.sender' } else { 'org.screencopy.receiver' }
-    $asset = if ($applicationId -eq 'dev.screencopy.sender') { 'ScrcpySend.apk' } else { 'ScrcpyRecv.apk' }
+    $asset = if ($applicationId -eq 'dev.screencopy.sender') { 'ScrcpySend.apk' } else { 'ScrcpyReceive.apk' }
     $certificate = 'ab' * 32
     $signerText = "Signer #1 certificate SHA-256 digest: $certificate"
     $packageText = "package: name='$applicationId' versionCode='10001' versionName='1.2.3'"
@@ -175,7 +179,7 @@ try {
     [IO.File]::WriteAllText($apk, 'not-an-android-package; mock SDK test fixture')
     $parameters = @{
         Apk = $apk; ApplicationId = $applicationId; VersionCode = 10001; VersionName = '1.2.3'
-        ApkAssetName = $asset; BuildTools = $scratch; OutputDirectory = (Join-Path $scratch 'result')
+        ApkAssetName = $asset; BuildTools = $scratch; OutputDirectory = (Join-Path $scratch 'publication-output')
     }
     & (Join-Path $PSScriptRoot 'make-update-manifest.ps1') @parameters
     $result = Get-Content -LiteralPath (Join-Path $parameters.OutputDirectory 'update.json') -Raw | ConvertFrom-Json
@@ -184,10 +188,15 @@ try {
     Assert ($result.schema -eq 1 -and $result.protocolVersion -eq 3) 'Manifest schema/protocol mismatch'
     Assert ($result.signingCertificateSha256 -ceq $certificate) 'Certificate digest mismatch'
     Assert ($result.sha256 -ceq (Get-FileHash $apk).Hash.ToLowerInvariant()) 'APK digest mismatch'
+    Assert ((Get-FileHash (Join-Path $parameters.OutputDirectory $asset)).Hash -ceq (Get-FileHash $apk).Hash) 'Published APK must match the verified input'
+    Assert ($result.apkAssetName -ceq $asset) 'Updater manifest must use the renamed APK'
+    $publishedNames = @((Get-ChildItem -LiteralPath $parameters.OutputDirectory -File).Name | Sort-Object)
+    Assert (($publishedNames -join ',') -ceq "$asset,update.json") 'Publication must contain exactly the named APK and one updater manifest'
     foreach ($invalid in @(
         @{ VersionCode = 1 }, @{ VersionCode = 10002 }, @{ VersionName = 'wrong' },
         @{ ApplicationId = 'invalid.package' },
-        @{ ApkAssetName = $(if ($asset -eq 'ScrcpySend.apk') { 'ScrcpyRecv.apk' } else { 'ScrcpySend.apk' }) }
+        @{ ApkAssetName = $(if ($asset -eq 'ScrcpySend.apk') { 'ScrcpyReceive.apk' } else { 'ScrcpySend.apk' }) },
+        @{ ApkAssetName = 'ScrcpyRecv.apk' }
     )) {
         $badParameters = $parameters.Clone()
         foreach ($key in $invalid.Keys) { $badParameters[$key] = $invalid[$key] }
@@ -247,7 +256,7 @@ try {
         Assert ($privatePath -in $fixtureExport.excluded) 'Private candidate must be explicitly excluded'
         Assert (!(Test-Path -LiteralPath (Join-Path $fixtureDestination $privatePath))) 'Private fixture was copied'
     }
-    Write-Output "PASS publication scripts: optimized release policy; verified export $($export.files.Count) files; exact schema, hashes, metadata and six rejection cases"
+    Write-Output "PASS publication scripts: optimized release policy; verified export $($export.files.Count) files; exact renamed APK/schema, hashes, metadata and seven rejection cases"
 } finally {
     if ($env:OS -eq 'Windows_NT') { Remove-Item -LiteralPath "Function:global:$aaptPath" -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath $scratch -Recurse -Force

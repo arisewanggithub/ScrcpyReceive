@@ -22,6 +22,23 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class ReceiverServerTest {
+    @Test fun listenerScreenShowsActualBoundPortAndRenamedDiscoveryLabel() {
+        val events = ConcurrentLinkedQueue<ReceiverScreenEvent>()
+        val descriptions = ConcurrentLinkedQueue<String>()
+        ReceiverServer.forProtocolTests(ReceiverServer.DEFAULT_NAME,
+            onListener = { descriptions.add(it) }, onScreenEvent = { events.add(it) }).use { server ->
+            server.start()
+            val listener = events.filterIsInstance<ReceiverScreenEvent.Listener>().first()
+            val expected = server.addresses().map { "$it:${server.listeningPort}" }
+            assertEquals(expected, listener.addresses)
+            assertEquals(server.addresses().joinToString("\n") { "$it : ${server.listeningPort}" },
+                ReceiverScreen().reduce(listener).addressText)
+            assertTrue(server.listeningPort in 1..65535)
+            assertTrue(expected.all { descriptions.first().contains(it) })
+            assertEquals("ScrcpyReceive", StrictJson.decode(server.advertisement()).string("name"))
+        }
+    }
+
     @Test fun actualCodeFreeHelloAndMultipleCastsUseIndependentPositiveSessionIds() {
         val available = AtomicInteger()
         ReceiverServer.forProtocolTests("Receiver", { state, _ -> if (state == "Available") available.incrementAndGet() }).use { server ->
@@ -258,7 +275,7 @@ class ReceiverServerTest {
         }
     }
 
-    @Test fun senderStopAndLostConnectionReturnReadyWithCurrentIPsAfterCleanup() {
+    @Test fun senderStopAndLostConnectionReturnReadyWithCurrentEndpointsAfterCleanup() {
         for (orderly in listOf(true, false)) {
             val events = ConcurrentLinkedQueue<ReceiverScreenEvent>()
             ReceiverServer.forProtocolTests("Receiver", onScreenEvent = events::add).use { server ->
@@ -278,7 +295,7 @@ class ReceiverServerTest {
                 await { events.count { it == ReceiverScreenEvent.CleanupFinished } >= 2 }
                 var state = ReceiverScreen()
                 events.forEach { state = state.reduce(it) }
-                assertEquals(server.addresses(), state.addresses)
+                assertEquals(server.addresses().map { "$it:${server.listeningPort}" }, state.addresses)
                 assertEquals(if (state.addresses.isEmpty()) ScreenPhase.NOT_READY else ScreenPhase.READY, state.phase)
                 assertTrue(state.showWaiting)
                 if (!orderly) assertEquals("PROTOCOL", state.problem)

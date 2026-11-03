@@ -38,7 +38,7 @@ class AppUpdateRemoteUiLocalTest {
     private lateinit var installs: FakeInstalls
     private var casting = false
     private val storage = "update_test_local_ui"
-    private inner class FakeBackend : UpdateController(requireNotNull(activity.applicationContext), "ScrcpyRecv", "ScrcpyRecv.apk", storage) {
+    private inner class FakeBackend : UpdateController(requireNotNull(activity.applicationContext), "ScrcpyRecv", "ScrcpyReceive.apk", storage) {
         private var observer: Observer? = null
         var checks = 0
         var downloads = 0
@@ -50,7 +50,7 @@ class AppUpdateRemoteUiLocalTest {
         var checkFailure = false
         init {
             val hash = "a".repeat(64)
-            release = ReleasePolicy.Manifest(activity.packageName, "Fixture", "ScrcpyRecv.apk", hash, hash, installedCode.toInt() + 1)
+            release = ReleasePolicy.Manifest(activity.packageName, "Fixture", "ScrcpyReceive.apk", hash, hash, installedCode.toInt() + 1)
             status = "Update available: Fixture"
             apk.outputStream().use { it.write("controlled updater fixture".toByteArray(Charsets.UTF_8)) }
         }
@@ -348,17 +348,17 @@ class AppUpdateRemoteUiLocalTest {
         val hash = ReleasePolicy.hex(MessageDigest.getInstance("SHA-256").digest(bytes))
         val manifest = JSONObject().put("schema", 1).put("applicationId", activity.packageName)
             .put("versionCode", requireNotNull(backend.release).versionCode).put("versionName", "Fixture")
-            .put("apkAssetName", "ScrcpyRecv.apk").put("sha256", hash)
+            .put("apkAssetName", "ScrcpyReceive.apk").put("sha256", hash)
             .put("signingCertificateSha256", hash).put("protocolVersion", 3)
         activity.getSharedPreferences(storage, Activity.MODE_PRIVATE).edit()
             .putString("manifest", manifest.toString())
-            .putString("apk_url", "https://github.com/arisewanggithub/ScrcpyRecv/releases/download/v2/ScrcpyRecv.apk")
+            .putString("apk_url", "https://github.com/arisewanggithub/ScrcpyRecv/releases/download/v2/ScrcpyReceive.apk")
             .putLong("last_success", System.currentTimeMillis()).commit()
         backend.apk.outputStream().use { it.write(bytes) }
         backend.verified = true; backend.beginInstall()
         val saved = ui.saveState()
         ui.stop()
-        val restored = object : UpdateController(requireNotNull(activity.applicationContext), "ScrcpyRecv", "ScrcpyRecv.apk", storage) {}
+        val restored = object : UpdateController(requireNotNull(activity.applicationContext), "ScrcpyRecv", "ScrcpyReceive.apk", storage) {}
         assertTrue(restored.installPending())
         assertTrue(restored.apk.isFile)
         assertTrue(restored.downloadReady())

@@ -3,14 +3,14 @@ param(
     [Parameter(Mandatory)][string]$ApplicationId,
     [Parameter(Mandatory)][int]$VersionCode,
     [Parameter(Mandatory)][string]$VersionName,
-    [Parameter(Mandatory)][ValidateSet('ScrcpySend.apk', 'ScrcpyRecv.apk')][string]$ApkAssetName,
+    [Parameter(Mandatory)][ValidateSet('ScrcpySend.apk', 'ScrcpyReceive.apk')][string]$ApkAssetName,
     [Parameter(Mandatory)][string]$BuildTools,
     [string]$OutputDirectory = 'publication-output'
 )
 $ErrorActionPreference = 'Stop'
 if ($VersionCode -le 1) { throw 'Publication versionCode must exceed the original installed version 1' }
 if ($ApplicationId -notin @('dev.screencopy.sender', 'org.screencopy.receiver')) { throw 'Unexpected application ID' }
-$expectedAsset = if ($ApplicationId -eq 'dev.screencopy.sender') { 'ScrcpySend.apk' } else { 'ScrcpyRecv.apk' }
+$expectedAsset = if ($ApplicationId -eq 'dev.screencopy.sender') { 'ScrcpySend.apk' } else { 'ScrcpyReceive.apk' }
 if ($ApkAssetName -ne $expectedAsset) { throw 'Application ID/asset name mismatch' }
 $suffix = if ($IsWindows -or $env:OS -eq 'Windows_NT') { '.bat' } else { '' }
 $certificateOutput = @(& (Join-Path $BuildTools "apksigner$suffix") verify --verbose --print-certs $Apk 2>&1)

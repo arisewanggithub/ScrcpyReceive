@@ -333,7 +333,7 @@ jobs:
       - name: Verify APK and produce exact updater manifest
         shell: pwsh
         run: |
-          ./tools/make-update-manifest.ps1 -Apk app/build/outputs/apk/release/app-release.apk -ApplicationId org.screencopy.receiver -VersionCode ([int]$env:ORG_GRADLE_PROJECT_releaseVersionCode) -VersionName $env:ORG_GRADLE_PROJECT_releaseVersionName -ApkAssetName ScrcpyRecv.apk -BuildTools "$env:ANDROID_HOME/build-tools/36.0.0"
+          ./tools/make-update-manifest.ps1 -Apk app/build/outputs/apk/release/app-release.apk -ApplicationId org.screencopy.receiver -VersionCode ([int]$env:ORG_GRADLE_PROJECT_releaseVersionCode) -VersionName $env:ORG_GRADLE_PROJECT_releaseVersionName -ApkAssetName ScrcpyReceive.apk -BuildTools "$env:ANDROID_HOME/build-tools/36.0.0"
       - name: Publish only verified APK and update.json
         env:
           GH_TOKEN: ${{ github.token }}
@@ -341,12 +341,12 @@ jobs:
           set -euo pipefail
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-              gh release create "$RELEASE_TAG" --draft --verify-tag --title "$RELEASE_TAG" --notes "Signed SRT/custom TCP release. See README for signing continuity and source licenses."
+              gh release create "$RELEASE_TAG" --draft --verify-tag --title "$RELEASE_TAG" --notes "Signed SRT/custom TCP release. Download ScrcpyReceive.apk. See README for signing continuity and source licenses."
             else
               gh release create "$RELEASE_TAG" --draft --target "$GITHUB_SHA" --title "$RELEASE_TAG" --notes "Opt-in development prerelease; excluded from stable automatic updates." --prerelease --latest=false
             fi
           fi
-          gh release upload "$RELEASE_TAG" publication-output/ScrcpyRecv.apk publication-output/update.json --clobber
+          gh release upload "$RELEASE_TAG" publication-output/ScrcpyReceive.apk publication-output/update.json --clobber
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest
           else
