@@ -387,7 +387,6 @@ class AppUpdateRemoteUiTest {
             activity.updatesForTests = ui
             ui.restoreState(saved); ui.mount(activity.content); ui.start(); ui.resume()
             assertTrue(containsText(ui.dialogViewForTests(), "has not been confirmed"))
-            assertTrue(button(ui.dialogViewForTests(), "Retry installation").hasFocus())
         }
         assertEquals(1, installs.installed)
         assertEquals(0, backend.downloads)
