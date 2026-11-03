@@ -4,18 +4,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ReceiverScreenTest {
-    private fun ready() = ReceiverScreen().reduce(ReceiverScreenEvent.Listener(listOf("192.168.1.20", "10.0.0.5")))
+    private fun ready() = ReceiverScreen().reduce(ReceiverScreenEvent.Listener(listOf("192.168.1.3:46756", "10.0.0.5:46756")))
 
     @Test fun idleProjectionShowsActualAddressesAndReadinessWithoutPublicIdentifiers() {
         val state = ready()
         assertEquals(ScreenPhase.READY, state.phase)
-        assertEquals("192.168.1.20\n10.0.0.5", state.addressText)
+        assertEquals("192.168.1.3 : 46756\n10.0.0.5 : 46756", state.addressText)
+        assertEquals(listOf("192.168.1.3:46756", "10.0.0.5:46756"), state.addresses)
         assertTrue(state.ready)
         assertTrue(state.showWaiting)
         assertTrue(state.canExit)
         assertNull(state.problem)
-        assertFalse(state.addressText.contains(":"))
-        assertFalse(state.addressText.contains("27184"))
     }
 
     @Test fun connectionAndTrackInitializationCannotHideWaitingScreen() {
@@ -63,7 +62,7 @@ class ReceiverScreenTest {
         val exiting = ready().reduce(ReceiverScreenEvent.Exit)
         assertEquals(ScreenPhase.EXITING, exiting.phase)
         assertFalse(exiting.canExit)
-        for (event in listOf(ReceiverScreenEvent.Listener(listOf("192.168.1.50")),
+        for (event in listOf(ReceiverScreenEvent.Listener(listOf("192.168.1.50:46756")),
             ReceiverScreenEvent.Connecting, ReceiverScreenEvent.FramePresented,
             ReceiverScreenEvent.CleanupFinished, ReceiverScreenEvent.Problem("TIMEOUT"), ReceiverScreenEvent.ListenerStopped)) {
             assertEquals(exiting, exiting.reduce(event))
@@ -72,8 +71,8 @@ class ReceiverScreenTest {
 
     @Test fun listenerRestartRefreshesTheActualAddressesAndDeduplicatesInterfaces() {
         val state = ready().reduce(ReceiverScreenEvent.ListenerStopped)
-            .reduce(ReceiverScreenEvent.Listener(listOf("192.168.1.21", "192.168.1.21")))
-        assertEquals("192.168.1.21", state.addressText)
+            .reduce(ReceiverScreenEvent.Listener(listOf("192.168.1.21:54321", "192.168.1.21:54321")))
+        assertEquals("192.168.1.21 : 54321", state.addressText)
     }
 
     @Test fun safeMarginsScaleForPortraitLandscapeTabletAndProjector() {

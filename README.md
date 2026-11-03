@@ -1,4 +1,4 @@
-# ScrcpyRecv
+# ScrcpyReceive
 
 Android receiver for [ScrcpySend](https://github.com/arisewanggithub/ScrcpySend)
 on a trusted family LAN. **SRT / fragmented MP4** playback uses **libsrt1.5.7**
@@ -6,7 +6,11 @@ for transport and **Media3 ExoPlayer1.11.1** for extraction, codecs and timing.
 A **custom TCP** compatibility path uses MediaCodec and AudioTrack directly.
 These are independent applications, not official scrcpy applications.
 
-The Android application ID is `org.screencopy.receiver`. The on-wire
+The Android app and release download are named **ScrcpyReceive** and
+**ScrcpyReceive.apk**; its application ID remains `org.screencopy.receiver`.
+The repository is [ScrcpyReceive](https://github.com/arisewanggithub/ScrcpyReceive). Releases publish only
+`ScrcpyReceive.apk`; older versions expecting `ScrcpyRecv.apk` need a manual
+installation to migrate. The on-wire
 `SCPY` framing uses **wire protocol version 3**, a compatibility discriminator
 separate from application release versions. Session IDs and track generations
 identify internal resources.
@@ -21,8 +25,10 @@ identify internal resources.
 - Selected settings and actual codec metadata are validated before admission.
   Unsupported codecs/configurations fail explicitly; requested audio is not
   silently disabled, and media is not silently converted to another transport.
-- Local SRT builds use `-PsrtTrial=true`; the default profile is custom TCP.
-  Signed release builds include both options.
+- Debug and release builds include SRT and custom TCP by default; SRT needs no
+  opt-in flag. The legacy `srtTrial` build-option name is retained for script
+  compatibility, not to designate SRT as experimental. `-PsrtTrial=false`
+  explicitly selects the TCP-only compatibility-test profile.
 - The waiting screen is replaced by aspect-fit video only after actual rendered
   video and the required audio readiness. A socket connection alone is not
   playback success.
@@ -46,13 +52,15 @@ discovery or connections.
 
 ## Install and receive
 
-1. Install ScrcpyRecv normally and connect it to the same reachable LAN as
+1. Install ScrcpyReceive normally and connect it to the same reachable LAN as
    ScrcpySend. Receiving needs no ADB, root, Developer options or microphone
    permission.
-2. Open ScrcpyRecv and keep its screen visible. The waiting page shows actual
-   IP addresses, concise status and remote-accessible idle actions.
+2. Open ScrcpyReceive and keep its screen visible. The waiting page shows actual
+   listening IP addresses and the bound TCP port (for example,
+   `192.168.1.3 : 46756`), concise status and remote-accessible idle actions.
+   Spaces around the colon are display-only; connection endpoints remain `IP:port`.
 3. Select the discovered receiver in ScrcpySend and choose Play. ScrcpySend
-   owns capture settings; ScrcpyRecv accepts or rejects them explicitly.
+   owns capture settings; ScrcpyReceive accepts or rejects them explicitly.
 4. Stop on the sender. After owned cleanup, the receiver returns to Ready.
    Exit and ordinary Android Back/Home finish/leave through normal lifecycle
    cleanup, not a process kill.
@@ -104,10 +112,10 @@ From your checkout, with `JAVA_HOME` set to JDK21:
 
 ```powershell
 $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk" # Or your existing SDK location.
-.\gradlew.bat :app:checkDebugAarMetadata :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest -PsrtTrial=true --no-daemon --console plain
+.\gradlew.bat :app:checkDebugAarMetadata :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon --console plain
 ```
 
-Also check the default profile with `-PsrtTrial=false`. Debug outputs are
+Also check the TCP-only compatibility profile with `-PsrtTrial=false`. Debug outputs are
 `app\build\outputs\apk\debug\app-debug.apk` and
 `app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk`.
 The optional `.\tools\interop.ps1 -SenderRoot ..\ScrcpySend` reads sender
@@ -142,7 +150,7 @@ or Gradle signing properties configured**, run in both transport profiles:
 
 ```powershell
 .\tools\test-publication.ps1
-.\gradlew.bat testDebugUnitTest lintDebug assembleDebug :app:lintRelease :app:assembleRelease -PsrtTrial=true -PrequireReleaseSigning=false --no-daemon --console plain
+.\gradlew.bat testDebugUnitTest lintDebug assembleDebug :app:lintRelease :app:assembleRelease -PrequireReleaseSigning=false --no-daemon --console plain
 ```
 
 Repeat with `-PsrtTrial=false`. `requireReleaseSigning=false` permits unsigned
@@ -165,7 +173,7 @@ To assemble its safe APK cohort only (no emulator/device operation), from a
 shell with no production signing variables/properties:
 
 ```powershell
-.\gradlew.bat :app:assembleRelease :release-check:assembleRelease -PreleaseSmokeTest=true -PsrtTrial=true -PrequireReleaseSigning=false --no-daemon --console plain
+.\gradlew.bat :app:assembleRelease :release-check:assembleRelease -PreleaseSmokeTest=true -PrequireReleaseSigning=false --no-daemon --console plain
 .\tools\verify-release-smoke-apks.ps1 -App app\build\outputs\apk\release\app-release.apk -TestApk release-check\build\outputs\apk\release\release-check-release.apk -ApplicationId org.screencopy.receiver
 ```
 
@@ -240,9 +248,12 @@ or an explicitly planned one-time migration/backup. A changed certificate
 cannot preserve an in-place installation; there is no automatic uninstall
 workaround.
 
-Assets are exactly **ScrcpyRecv.apk** and **update.json**. Mandatory fields:
+Release assets are exactly **ScrcpyReceive.apk** and **update.json**. No legacy
+APK copy is published. Older versions expecting `ScrcpyRecv.apk` need a manual
+installation with the same application ID and signing certificate to migrate.
+Mandatory fields:
 `schema:1`, `applicationId:"org.screencopy.receiver"`, integer `versionCode`,
-`versionName`, `apkAssetName:"ScrcpyRecv.apk"`, lowercase 64-hex `sha256`,
+`versionName`, `apkAssetName:"ScrcpyReceive.apk"`, lowercase 64-hex `sha256`,
 lowercase 64-hex `signingCertificateSha256`, and `protocolVersion:3`.
 The manifest generator verifies the actual signed APK's identity/version.
 The sender uses the same schema with `dev.screencopy.sender` and `ScrcpySend.apk`.

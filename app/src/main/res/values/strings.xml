@@ -1,7 +1,7 @@
 <resources>
-    <string name="app_name">ScrcpyRecv</string>
-    <string name="brand">SCRCPYRECV</string>
-    <string name="receiver_ip">RECEIVER IP ADDRESS</string>
+    <string name="app_name">ScrcpyReceive</string>
+    <string name="brand">SCRCPYRECEIVE</string>
+    <string name="receiver_ip">RECEIVER IP ADDRESS:PORT</string>
     <string name="address_unavailable">Connect to Wi-Fi or Ethernet</string>
     <string name="status_starting">Starting receiver</string>
     <string name="status_ready">Ready</string>
@@ -44,7 +44,7 @@
     <string name="problem_video_decoder">Video decoding stopped unexpectedly. Restart the cast; if repeated, try another codec.</string>
     <string name="problem_receiver_orientation">This screen could not request the selected orientation. Choose Auto or reopen the receiver and retry.</string>
     <string name="problem_sender_reported">The sender reported %1$s. Check its displayed error before starting another cast.</string>
-    <string name="problem_version">Update ScrcpySend and ScrcpyRecv, then select this screen again on the sender.</string>
+    <string name="problem_version">Update ScrcpySend and ScrcpyReceive, then select this screen again on the sender.</string>
     <string name="problem_discovery">Discovery is unavailable. Enter this screen\'s IP address manually on the sender.</string>
     <string name="problem_generic">The cast stopped. Check the sender and start casting again.</string>
     <string name="trusted_lan">Trusted family LAN only. Unencrypted media.</string>

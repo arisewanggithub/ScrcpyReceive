@@ -37,7 +37,7 @@ class ReceiverMainActivityUpdateEntryTest {
     private lateinit var ui: UpdateUi
     private val storage = "update_test_receiver_entry"
     private class FakeBackend(context: Context, storage: String) :
-        UpdateController(context, "ScrcpyRecv", "ScrcpyRecv.apk", storage) {
+        UpdateController(context, "ScrcpyReceive", "ScrcpyReceive.apk", storage) {
         private var observer: Observer? = null
         var checks = 0
         var cancels = 0
@@ -55,7 +55,7 @@ class ReceiverMainActivityUpdateEntryTest {
         override fun download() { fail("Entry navigation must not download an APK") }
         override fun verifyForInstall(ready: () -> Unit) { fail("Entry navigation must not install an APK") }
         fun makeUpdateAvailable() {
-            release = ReleasePolicy.Manifest("org.screencopy.receiver", "Fixture", "ScrcpyRecv.apk",
+            release = ReleasePolicy.Manifest("org.screencopy.receiver", "Fixture", "ScrcpyReceive.apk",
                 "a".repeat(64), "a".repeat(64), installedCode.toInt() + 1)
             checkSucceeded = true
             observer?.changed()
@@ -105,6 +105,17 @@ class ReceiverMainActivityUpdateEntryTest {
         assertNull(activity.findViewById<View>(R.id.app_update_available))
         assertEquals(activity.getString(R.string.installed_version, backend.installedName),
             activity.findViewById<TextView>(R.id.home_installed_version).text.toString())
+    }
+    @Test fun homeDisplaysListeningEndpointsAndRenamedAppLabel() {
+        val endpoints = listOf("192.168.1.3:46756", "10.0.0.5:46756")
+        val state = org.screencopy.receiver.ui.ReceiverScreen().reduce(
+            org.screencopy.receiver.ui.ReceiverScreenEvent.Listener(endpoints))
+        org.screencopy.receiver.ui.ReceiverScreenView(activity.window.decorView) {}.render(state)
+        val addresses = activity.findViewById<TextView>(R.id.receiver_addresses)
+        assertEquals("192.168.1.3 : 46756\n10.0.0.5 : 46756", addresses.text.toString())
+        assertEquals(2, addresses.maxLines)
+        assertEquals("ScrcpyReceive", activity.applicationInfo.loadLabel(activity.packageManager).toString())
+        assertEquals("org.screencopy.receiver", activity.packageName)
     }
     @Test fun initialRemoteConfirmDoesNotExitReceiver() {
         key(KeyEvent.KEYCODE_DPAD_CENTER)

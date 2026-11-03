@@ -25,17 +25,17 @@ data class ReceiverScreen(
 ) {
     val showWaiting: Boolean get() = phase != ScreenPhase.PLAYING
     val ready: Boolean get() = listenerOpen && addresses.isNotEmpty()
-    val addressText: String get() = addresses.joinToString("\n")
+    val addressText: String get() = addresses.joinToString("\n") { it.replace(":", " : ") }
     val canExit: Boolean get() = phase != ScreenPhase.EXITING
 
     fun reduce(event: ReceiverScreenEvent): ReceiverScreen {
         if (phase == ScreenPhase.EXITING) return this
         return when (event) {
             is ReceiverScreenEvent.Listener -> {
-                val ips = event.addresses.distinct()
-                copy(addresses = ips, listenerOpen = true,
+                val endpoints = event.addresses.distinct()
+                copy(addresses = endpoints, listenerOpen = true,
                     phase = when {
-                        ips.isEmpty() -> ScreenPhase.NOT_READY
+                        endpoints.isEmpty() -> ScreenPhase.NOT_READY
                         phase == ScreenPhase.PLAYING || phase == ScreenPhase.CONNECTING -> phase
                         else -> ScreenPhase.READY
                     })

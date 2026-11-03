@@ -1,4 +1,4 @@
-name: ScrcpyRecv PR validation and signed releases
+name: ScrcpyReceive PR validation and signed releases
 on:
   pull_request:
     branches: [main]
@@ -49,7 +49,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ScrcpyRecv-junit-srt-${{ matrix.srt }}-${{ github.run_attempt }}
+          name: ScrcpyReceive-junit-srt-${{ matrix.srt }}-${{ github.run_attempt }}
           retention-days: 7
           if-no-files-found: ignore
           path: app/build/test-results/testDebugUnitTest/TEST-*.xml
@@ -143,7 +143,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ScrcpyRecv-update-ui-${{ github.run_attempt }}
+          name: ScrcpyReceive-update-ui-${{ github.run_attempt }}
           retention-days: 7
           if-no-files-found: ignore
           path: |
@@ -194,7 +194,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ScrcpyRecv-release-smoke-${{ github.run_number }}-${{ github.run_attempt }}
+          name: ScrcpyReceive-release-smoke-${{ github.run_number }}-${{ github.run_attempt }}
           retention-days: 7
           if-no-files-found: ignore
           path: |
@@ -222,13 +222,13 @@ jobs:
         run: ./tools/pr-validation.ps1 -Mode Record
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ScrcpyRecv-pr-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ScrcpyReceive-pr-validation-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 90
           if-no-files-found: error
           path: publication-output/pr-validation.json
   verify-validation:
     name: Verify validated release source
-    if: github.repository == 'arisewanggithub/ScrcpyRecv' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && vars.ENABLE_MAIN_PRERELEASES == 'true'))))
+    if: github.repository == 'arisewanggithub/ScrcpyReceive' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && vars.ENABLE_MAIN_PRERELEASES == 'true'))))
     permissions:
       contents: read
       actions: read
@@ -258,7 +258,7 @@ jobs:
         run: ./tools/pr-validation.ps1 -Mode Verify
   publish:
     needs: [verify-validation]
-    if: github.repository == 'arisewanggithub/ScrcpyRecv' && github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && vars.ENABLE_MAIN_PRERELEASES == 'true'))
+    if: github.repository == 'arisewanggithub/ScrcpyReceive' && github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && vars.ENABLE_MAIN_PRERELEASES == 'true'))
     permissions:
       contents: write
     runs-on: ubuntu-24.04
@@ -326,14 +326,14 @@ jobs:
       - name: Retain exact signed-release R8 mapping (not a release asset)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ScrcpyRecv-r8-${{ github.sha }}-${{ github.run_number }}-${{ github.run_attempt }}
+          name: ScrcpyReceive-r8-${{ github.sha }}-${{ github.run_number }}-${{ github.run_attempt }}
           retention-days: 30
           if-no-files-found: error
           path: app/build/outputs/mapping/release/mapping.txt
       - name: Verify APK and produce exact updater manifest
         shell: pwsh
         run: |
-          ./tools/make-update-manifest.ps1 -Apk app/build/outputs/apk/release/app-release.apk -ApplicationId org.screencopy.receiver -VersionCode ([int]$env:ORG_GRADLE_PROJECT_releaseVersionCode) -VersionName $env:ORG_GRADLE_PROJECT_releaseVersionName -ApkAssetName ScrcpyRecv.apk -BuildTools "$env:ANDROID_HOME/build-tools/36.0.0"
+          ./tools/make-update-manifest.ps1 -Apk app/build/outputs/apk/release/app-release.apk -ApplicationId org.screencopy.receiver -VersionCode ([int]$env:ORG_GRADLE_PROJECT_releaseVersionCode) -VersionName $env:ORG_GRADLE_PROJECT_releaseVersionName -ApkAssetName ScrcpyReceive.apk -BuildTools "$env:ANDROID_HOME/build-tools/36.0.0"
       - name: Publish only verified APK and update.json
         env:
           GH_TOKEN: ${{ github.token }}
@@ -341,12 +341,12 @@ jobs:
           set -euo pipefail
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-              gh release create "$RELEASE_TAG" --draft --verify-tag --title "$RELEASE_TAG" --notes "Signed SRT/custom TCP release. See README for signing continuity and source licenses."
+              gh release create "$RELEASE_TAG" --draft --verify-tag --title "$RELEASE_TAG" --notes "Signed SRT/custom TCP release. Download ScrcpyReceive.apk. See README for signing continuity and source licenses."
             else
               gh release create "$RELEASE_TAG" --draft --target "$GITHUB_SHA" --title "$RELEASE_TAG" --notes "Opt-in development prerelease; excluded from stable automatic updates." --prerelease --latest=false
             fi
           fi
-          gh release upload "$RELEASE_TAG" publication-output/ScrcpyRecv.apk publication-output/update.json --clobber
+          gh release upload "$RELEASE_TAG" publication-output/ScrcpyReceive.apk publication-output/update.json --clobber
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest
           else

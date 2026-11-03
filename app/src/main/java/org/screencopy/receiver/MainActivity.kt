@@ -90,7 +90,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 screen.phase == org.screencopy.receiver.ui.ScreenPhase.PLAYING
         }
         updates = updateUiFactoryForTests?.invoke(this, castActive) ?: dev.scrcpy.update.UpdateUi(this,
-            dev.scrcpy.update.UpdateController.get(this, "ScrcpyRecv", "ScrcpyRecv.apk"),
+            dev.scrcpy.update.UpdateController.get(this, "ScrcpyReceive", "ScrcpyReceive.apk"),
             castActive)
         updates.restoreState(savedInstanceState?.getBundle("app_update_ui"))
         bindHome()

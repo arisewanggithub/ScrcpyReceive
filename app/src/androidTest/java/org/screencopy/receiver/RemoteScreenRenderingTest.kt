@@ -22,7 +22,27 @@ import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(AndroidJUnit4::class)
 class RemoteScreenRenderingTest {
-    @Test fun portraitLandscapeTabletAndProjectorLayoutsKeepActualIPsAndExitReadable() {
+    @Test fun spacedListeningEndpointsFitCurrentDeviceLayout() {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            val base = InstrumentationRegistry.getInstrumentation().targetContext
+            val context = ContextThemeWrapper(base, R.style.ReceiverTheme)
+            val root = LayoutInflater.from(context).inflate(R.layout.activity_receiver, null)
+            val state = ReceiverScreen().reduce(ReceiverScreenEvent.Listener(
+                listOf("100.64.0.1:27184", "192.168.100.200:65535")))
+            ReceiverScreenView(root) {}.render(state)
+            val metrics = context.resources.displayMetrics
+            root.measure(View.MeasureSpec.makeMeasureSpec(metrics.widthPixels, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(metrics.heightPixels, View.MeasureSpec.EXACTLY))
+            root.layout(0, 0, metrics.widthPixels, metrics.heightPixels)
+            val addresses = root.findViewById<TextView>(R.id.receiver_addresses)
+            val expected = listOf("100.64.0.1 : 27184", "192.168.100.200 : 65535")
+            assertEquals(expected.joinToString("\n"), addresses.text.toString())
+            assertEquals(2, addresses.maxLines)
+            assertTrue(expected.all { addresses.paint.measureText(it) <= addresses.width + 1 })
+        }
+    }
+
+    @Test fun portraitLandscapeTabletAndProjectorLayoutsKeepActualEndpointsAndExitReadable() {
         InstrumentationRegistry.getInstrumentation().runOnMainSync {
             for ((width, height) in listOf(360 to 800, 800 to 360, 1280 to 800, 1920 to 1080)) {
                 val base = InstrumentationRegistry.getInstrumentation().targetContext
@@ -37,7 +57,8 @@ class RemoteScreenRenderingTest {
                 val root = LayoutInflater.from(context).inflate(R.layout.activity_receiver, null) as ViewGroup
                 val exits = AtomicInteger()
                 val renderer = ReceiverScreenView(root) { exits.incrementAndGet() }
-                val ips = listOf("192.168.1.20", "10.0.0.5")
+                val ips = listOf("192.168.100.200:65535", "10.0.0.5:46756")
+                val displayedEndpoints = listOf("192.168.100.200 : 65535", "10.0.0.5 : 46756")
                 val ready = ReceiverScreen().reduce(ReceiverScreenEvent.Listener(ips))
                 renderer.render(ready)
                 val density = context.resources.displayMetrics.density
@@ -47,11 +68,11 @@ class RemoteScreenRenderingTest {
                     View.MeasureSpec.makeMeasureSpec(pixelsHigh, View.MeasureSpec.EXACTLY))
                 root.layout(0, 0, pixelsWide, pixelsHigh)
                 val addresses = root.findViewById<TextView>(R.id.receiver_addresses)
-                assertEquals(ips.joinToString("\n"), addresses.text.toString())
+                assertEquals(displayedEndpoints.joinToString("\n"), addresses.text.toString())
                 assertEquals(2, addresses.maxLines)
-                assertTrue(ips.all { addresses.paint.measureText(it) <= addresses.width + 1 })
+                assertTrue(displayedEndpoints.all { addresses.paint.measureText(it) <= addresses.width + 1 })
                 assertEquals("Ready", root.findViewById<TextView>(R.id.status_label).text.toString())
-                assertEquals(ips.joinToString("\n"), root.findViewById<TextView>(R.id.receiver_addresses).text.toString())
+                assertEquals(displayedEndpoints.joinToString("\n"), root.findViewById<TextView>(R.id.receiver_addresses).text.toString())
                 val exit = root.findViewById<Button>(R.id.exit_receiver)
                 assertTrue(exit.isFocusable)
                 assertTrue(exit.height >= (48 * density).toInt())
@@ -84,7 +105,7 @@ class RemoteScreenRenderingTest {
             val renderer = ReceiverScreenView(root) {}
             val pressure = org.screencopy.receiver.media.QueuePressure(2, org.screencopy.receiver.media.QueueLimit.PTS,
                 13, 49920, 14, 53760, 260000, 48, 512 * 1024, 250000, 250)
-            val state = ReceiverScreen().reduce(ReceiverScreenEvent.Listener(listOf("192.168.1.20")))
+            val state = ReceiverScreen().reduce(ReceiverScreenEvent.Listener(listOf("192.168.1.20:46756")))
                 .reduce(ReceiverScreenEvent.Connecting)
                 .reduce(ReceiverScreenEvent.Problem("CONGESTION", org.screencopy.receiver.ui.FailureReason.QUEUE_PTS, pressure))
                 .reduce(ReceiverScreenEvent.CleanupFinished)
@@ -104,7 +125,7 @@ class RemoteScreenRenderingTest {
             val root = LayoutInflater.from(ContextThemeWrapper(base, R.style.ReceiverTheme)).inflate(R.layout.activity_receiver, null)
             val exits = AtomicInteger()
             val renderer = ReceiverScreenView(root) { exits.incrementAndGet() }
-            val ready = ReceiverScreen().reduce(ReceiverScreenEvent.Listener(listOf("10.0.0.8")))
+            val ready = ReceiverScreen().reduce(ReceiverScreenEvent.Listener(listOf("10.0.0.8:46756")))
             renderer.render(ready)
             val exit = root.findViewById<Button>(R.id.exit_receiver)
             exit.requestFocus()

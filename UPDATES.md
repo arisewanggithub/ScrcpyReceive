@@ -1,6 +1,6 @@
 # App updates
 
-ScrcpySend and ScrcpyRecv use the stable Android application IDs `dev.screencopy.sender` and `org.screencopy.receiver`, respectively. In-place upgrades preserve app data only with the same application ID and signing certificate. They are independent projects, not official scrcpy applications; upstream attribution is provided in the third-party notices.
+ScrcpySend and ScrcpyReceive use the stable Android application IDs `dev.screencopy.sender` and `org.screencopy.receiver`, respectively. In-place upgrades preserve app data only with the same application ID and signing certificate. They are independent projects, not official scrcpy applications; upstream attribution is provided in the third-party notices.
 
 ## Remote-only flow
 
@@ -25,9 +25,16 @@ The receiver initially focuses its passive home content, so the first remote OK 
 The production endpoints are pinned to:
 
 - `https://api.github.com/repos/arisewanggithub/ScrcpySend/releases/latest`
-- `https://api.github.com/repos/arisewanggithub/ScrcpyRecv/releases/latest`
+- `https://api.github.com/repos/arisewanggithub/ScrcpyReceive/releases/latest`
 
-Only stable, non-draft releases qualify. Each release must contain exactly one `update.json` and its exactly named APK (`ScrcpySend.apk` or `ScrcpyRecv.apk`). No PAT, credentials, device identifiers, capture details, or signing keys are sent. GitHub receives the ordinary HTTPS request metadata and public updater User-Agent. HTTP 403/429 rate limits honor bounded server cooldowns; manual retries do not bypass them.
+Only stable, non-draft releases qualify. Each release must contain exactly one `update.json` and its exactly named APK (`ScrcpySend.apk` or `ScrcpyReceive.apk`). No PAT, credentials, device identifiers, capture details, or signing keys are sent. GitHub receives the ordinary HTTPS request metadata and public updater User-Agent. HTTP 403/429 rate limits honor bounded server cooldowns; manual retries do not bypass them.
+
+Receiver releases publish only **ScrcpyReceive.apk**, with no **ScrcpyRecv.apk**
+compatibility copy. The app updater and `update.json` use the new filename.
+Older installed receiver versions require a one-time manual installation to
+migrate; use the same application ID and signing certificate to preserve data.
+The repository is now `arisewanggithub/ScrcpyReceive`; its application ID,
+signing certificate, version and update verification rules are unchanged.
 
 `update.json` is at most 64 KiB and has these mandatory fields:
 
@@ -44,7 +51,7 @@ Only stable, non-draft releases qualify. Each release must contain exactly one `
 }
 ```
 
-For the receiver use `org.screencopy.receiver` and `ScrcpyRecv.apk`. `protocolVersion:3` identifies wire compatibility, not an application release number; `schema:1` identifies the update manifest schema. Version codes must be positive integers no greater than 2147483647; names are not used for ordering. The placeholders above are documentation, not a valid manifest. Optional extra fields do not authorize protocol or signer changes.
+For the receiver use `org.screencopy.receiver` and `ScrcpyReceive.apk`. `protocolVersion:3` identifies wire compatibility, not an application release number; `schema:1` identifies the update manifest schema. Version codes must be positive integers no greater than 2147483647; names are not used for ordering. The placeholders above are documentation, not a valid manifest. Optional extra fields do not authorize protocol or signer changes.
 
 Assets initially belong to the pinned repository's GitHub release download path. HTTPS redirects are bounded and restricted to the literal hosts `github.com`, `api.github.com`, `objects.githubusercontent.com`, and `release-assets.githubusercontent.com`. APKs are bounded to 250 MiB. The app verifies SHA-256, archive application ID, archive version against the manifest, strictly newer version code, manifest signer fingerprint, and equality with the currently installed app's single current signer. It verifies again before granting the installer read access to the private APK through its narrowly scoped, non-exported FileProvider.
 

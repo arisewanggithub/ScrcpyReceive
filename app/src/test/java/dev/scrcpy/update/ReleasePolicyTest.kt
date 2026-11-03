@@ -25,6 +25,29 @@ class ReleasePolicyTest {
             ReleasePolicy.verifyIdentity(release, id, 2, 2, setOf(hash), setOf(hash))
         }
     }
+    @Test fun receiverReleaseRequiresRenamedApkWithoutLegacyFallback() {
+        val receiverId = "org.screencopy.receiver"
+        val receiverAsset = "ScrcpyReceive.apk"
+        val value = manifest().put("applicationId", receiverId).put("apkAssetName", receiverAsset)
+        assertEquals(receiverAsset, ReleasePolicy.parse(value.toString(), receiverId, receiverAsset).apkAssetName)
+        val url = "https://github.com/arisewanggithub/ScrcpyReceive/releases/download/v2/$receiverAsset"
+        val api = JSONObject().put("draft", false).put("prerelease", false).put("assets",
+            JSONArray().put(JSONObject().put("name", receiverAsset).put("browser_download_url", url)))
+        assertEquals(url, ReleasePolicy.repositoryAssetUrl(api.toString(), receiverAsset, "ScrcpyReceive"))
+        api.getJSONArray("assets").getJSONObject(0).put("browser_download_url",
+            url.replace("/ScrcpyReceive/", "/ScrcpyRecv/"))
+        assertThrows(IllegalArgumentException::class.java) {
+            ReleasePolicy.repositoryAssetUrl(api.toString(), receiverAsset, "ScrcpyReceive")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ReleasePolicy.parse(value.put("apkAssetName", "ScrcpyRecv.apk").toString(), receiverId, receiverAsset)
+        }
+        api.put("assets", JSONArray().put(JSONObject().put("name", "ScrcpyRecv.apk")
+            .put("browser_download_url", url.replace(receiverAsset, "ScrcpyRecv.apk"))))
+        assertThrows(IllegalArgumentException::class.java) {
+            ReleasePolicy.repositoryAssetUrl(api.toString(), receiverAsset, "ScrcpyReceive")
+        }
+    }
     @Test fun malformedAndIncompatibleManifests() {
         for (key in listOf("schema", "applicationId", "versionCode", "versionName", "apkAssetName",
             "sha256", "signingCertificateSha256", "protocolVersion")) {

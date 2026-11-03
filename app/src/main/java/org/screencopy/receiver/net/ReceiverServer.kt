@@ -197,9 +197,11 @@ class ReceiverServer private constructor(
     }
 
     private fun publishListener() {
-        if (running.get()) onScreenEvent(ReceiverScreenEvent.Listener(addresses()))
+        if (!running.get()) return
+        val endpoints = addresses().map { "$it:$listeningPort" }
+        if (running.get()) onScreenEvent(ReceiverScreenEvent.Listener(endpoints))
         if (running.get()) onListener("$name\n" +
-            addresses().joinToString("\n") { "$it:$listeningPort" }.ifEmpty { "No local IPv4 network; connect Wi-Fi or Ethernet (TCP $listeningPort)" } +
+            endpoints.joinToString("\n").ifEmpty { "No local IPv4 network; connect Wi-Fi or Ethernet (TCP $listeningPort)" } +
             "\nUnencrypted trusted-LAN TCP.")
     }
 
@@ -656,7 +658,7 @@ class ReceiverServer private constructor(
     companion object {
         const val PORT = 27184
         const val DISCOVERY_PORT = 27183
-        const val DEFAULT_NAME = "ScrcpyRecv"
+        const val DEFAULT_NAME = "ScrcpyReceive"
         private val ERROR_CODES = setOf("VERSION", "BUSY", "UNSUPPORTED_CONFIG", "PROTOCOL",
             "CAPTURE_FAILED", "AUDIO_FAILED", "DECODER_FAILED", "TIMEOUT", "CONGESTION", "INTERNAL")
         private fun now() = System.nanoTime() / 1_000_000

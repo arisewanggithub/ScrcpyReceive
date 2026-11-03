@@ -1,6 +1,6 @@
-# ScrcpyRecv architecture
+# ScrcpyReceive architecture
 
-ScrcpyRecv accepts one Android screen/audio cast from ScrcpySend on a trusted
+ScrcpyReceive accepts one Android screen/audio cast from ScrcpySend on a trusted
 LAN. The application ID `org.screencopy.receiver` and `SCPY` framing are stable
 compatibility identifiers. Wire protocol version 3 is separate from app release
 versions. Wire schemas/resource bounds are in

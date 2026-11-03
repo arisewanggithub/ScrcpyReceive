@@ -64,11 +64,11 @@ class UpdateOperationOutcomeLocalTest {
         val installed = if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
         val target = installed.toInt() + 1
         val manifest = JSONObject().put("schema", 1).put("applicationId", activity.packageName)
-            .put("versionCode", target).put("versionName", "Fixture").put("apkAssetName", "ScrcpyRecv.apk")
+            .put("versionCode", target).put("versionName", "Fixture").put("apkAssetName", "ScrcpyReceive.apk")
             .put("sha256", "a".repeat(64)).put("signingCertificateSha256", "b".repeat(64)).put("protocolVersion", 3)
         activity.getSharedPreferences(storage, Activity.MODE_PRIVATE).edit().clear()
             .putString("manifest", manifest.toString())
-            .putString("apk_url", "https://github.com/arisewanggithub/ScrcpyRecv/releases/download/v2/ScrcpyRecv.apk")
+            .putString("apk_url", "https://github.com/arisewanggithub/ScrcpyReceive/releases/download/v2/ScrcpyReceive.apk")
             .putLong("last_success", System.currentTimeMillis())
             .putLong("install_target_version", target.toLong()).putString("install_outcome", outcome)
             .putString("install_signer", "b".repeat(64)).commit()
@@ -76,7 +76,7 @@ class UpdateOperationOutcomeLocalTest {
         java.io.File(directory, "verified.apk").outputStream().use { it.write("invalid APK fixture".toByteArray(Charsets.UTF_8)) }
     }
     private fun newController(): UpdateController = object :
-        UpdateController(requireNotNull(activity.applicationContext), "ScrcpyRecv", "ScrcpyRecv.apk", storage) {
+        UpdateController(requireNotNull(activity.applicationContext), "ScrcpyReceive", "ScrcpyReceive.apk", storage) {
         override fun newClient(): ReleaseClient = ReleaseClient { url ->
             object : HttpURLConnection(URL(url)) {
                 override fun connect() {}
