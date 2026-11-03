@@ -1,8 +1,8 @@
-# ScrcpySend / ScrcpyRecv wire protocol
+# ScrcpySend / ScrcpyReceive wire protocol
 
 Framing version field: **3**. This is a protocol compatibility discriminator,
 separate from application release versions.
-ScrcpySend / ScrcpyRecv use plain TCP control: no TLS, authentication, QR, permanent peer identity,
+ScrcpySend / ScrcpyReceive use plain TCP control: no TLS, authentication, QR, permanent peer identity,
 credential issuance, saved trust or revocation. Anyone on the LAN can observe or
 forge discovery/session/media traffic. Use ONLY a trusted private family LAN.
 No human session code, pairing code, peer credential or comparison confirmation
@@ -12,8 +12,8 @@ dependency on sender's privileged backend.
 
 ## Listener selection and discovery
 
-Receiver prominently displays actual IP addresses, with name as a label. Normal
-receiver UI may hide port/settings; TCP27184 remains in discovery/internal
+Receiver prominently displays actual listening IPv4 addresses and their bound TCP
+port, with name as a label. TCP27184 is the default in discovery/internal
 configuration and sender manual-address compatibility. Sender selects an
 endpoint by actual UDP source IP + TCP port, with name as a label only, never
 identity. One cast at a time; busy never evicts a cast.

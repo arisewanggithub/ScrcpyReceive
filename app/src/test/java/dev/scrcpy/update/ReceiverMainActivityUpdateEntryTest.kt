@@ -37,7 +37,7 @@ class ReceiverMainActivityUpdateEntryTest {
     private lateinit var ui: UpdateUi
     private val storage = "update_test_receiver_entry"
     private class FakeBackend(context: Context, storage: String) :
-        UpdateController(context, "ScrcpyRecv", "ScrcpyReceive.apk", storage) {
+        UpdateController(context, "ScrcpyReceive", "ScrcpyReceive.apk", storage) {
         private var observer: Observer? = null
         var checks = 0
         var cancels = 0

@@ -8,7 +8,7 @@ These are independent applications, not official scrcpy applications.
 
 The Android app and release download are named **ScrcpyReceive** and
 **ScrcpyReceive.apk**; its application ID remains `org.screencopy.receiver`.
-The repository retains the `ScrcpyRecv` name. Releases publish only
+The repository is [ScrcpyReceive](https://github.com/arisewanggithub/ScrcpyReceive). Releases publish only
 `ScrcpyReceive.apk`; older versions expecting `ScrcpyRecv.apk` need a manual
 installation to migrate. The on-wire
 `SCPY` framing uses **wire protocol version 3**, a compatibility discriminator

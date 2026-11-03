@@ -24,7 +24,9 @@ $workflow = Get-Content -LiteralPath (Join-Path $root '.github/workflows/build-r
 Assert ($workflow.Contains('-ApkAssetName ScrcpyReceive.apk')) 'Receiver manifest generation must use the renamed APK'
 Assert ($workflow.Contains('gh release upload "$RELEASE_TAG" publication-output/ScrcpyReceive.apk publication-output/update.json --clobber')) 'Receiver publication must upload only the renamed APK and updater manifest'
 $mainActivity = Get-Content -LiteralPath (Join-Path $root 'app/src/main/java/org/screencopy/receiver/MainActivity.kt') -Raw
-Assert ($mainActivity.Contains('UpdateController.get(this, "ScrcpyRecv", "ScrcpyReceive.apk")')) 'Receiver updater must retain the repository and use the renamed APK'
+Assert ($mainActivity.Contains('UpdateController.get(this, "ScrcpyReceive", "ScrcpyReceive.apk")')) 'Receiver updater must use the renamed repository and APK'
+Assert ($workflow.Contains("if: github.repository == 'arisewanggithub/ScrcpyReceive'") -and
+    $workflow.Contains('name: ScrcpyReceive-pr-validation-')) 'Release gating and proof artifacts must use the renamed repository'
 & (Join-Path $PSScriptRoot 'pr-validation.ps1') -Mode SelfTest
 foreach ($job in @('checks', 'update-ui', 'optimized-native-smoke', 'record-validation')) {
     Assert ($workflow -match "(?m)^  ${job}:\r?\n    (?:name:[^\r\n]*\r?\n    )?if: github.event_name == 'pull_request'") 'Full validation and proof generation must run only on PRs'
@@ -54,6 +56,8 @@ Assert ($appBuild -match 'signingConfig = signingConfigs.getByName\("debug"\)') 
 Assert ($releaseBlock.Groups['body'].Value -match 'isDebuggable = false') 'Optimized release must not become debuggable'
 Assert ($appBuild -notmatch 'testBuildType|prepareReleaseSmokeSources|src/releaseSmokeTest|testProguardFiles') 'App AndroidTest must remain the ordinary debug cohort'
 $module = Get-Content (Join-Path $root 'release-check/build.gradle.kts') -Raw
+$targetResourceCheck = Get-Content (Join-Path $root 'release-check/src/main/java/dev/scrcpy/releasecheck/TargetResourcesCheck.kt') -Raw
+Assert ($targetResourceCheck.Contains('assertEquals("ScrcpyReceive", app.context.getText(label).toString())')) 'Optimized resource smoke check must expect the renamed app label'
 Assert ($module -match 'id\("com.android.test"\)' -and $module -match 'self-instrumenting"\] = true') 'Standalone self-instrumenting harness required'
 Assert ($module -match 'targetProjectPath = ":app"' -and $module -notmatch '(implementation|api|compileOnly)\(project') 'Harness must consume only the target APK, never app code'
 Assert ($module -match 'isMinifyEnabled = true' -and $module -match 'isDebuggable = false') 'Harness must independently optimize its own runtime'

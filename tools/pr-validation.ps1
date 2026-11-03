@@ -15,7 +15,7 @@ function Keys($value, $expected) {
     Require ($null -ne $value -and !(Compare-Object -CaseSensitive $expected @($value.PSObject.Properties.Name))) 'Validation record fields differ from schema 1'
 }
 function NewContext($repo, $sha, $tree, $pr, $run, $jobs, $artifact) {
-    Require ($repo -cin @('arisewanggithub/ScrcpySend', 'arisewanggithub/ScrcpyRecv') -and (IsSha $sha) -and (IsSha $tree)) 'Unsupported repository or release revision'
+    Require ($repo -cin @('arisewanggithub/ScrcpySend', 'arisewanggithub/ScrcpyReceive') -and (IsSha $sha) -and (IsSha $tree)) 'Unsupported repository or release revision'
     Require ($pr.merged_at -and $pr.merge_commit_sha -ceq $sha -and $pr.base.ref -ceq 'main' -and $pr.base.repo.full_name -ceq $repo -and (IsId $pr.number) -and (IsSha $pr.head.sha)) 'Release must be the exact merge commit of a merged main PR'
     Require ($run.repository.full_name -ceq $repo -and $run.event -ceq 'pull_request' -and $run.path -ceq '.github/workflows/build-release.yml' -and $run.head_sha -ceq $pr.head.sha -and $run.status -ceq 'completed' -and $run.conclusion -ceq 'success' -and (IsId $run.id) -and (IsId $run.run_attempt)) 'Matching PR validation workflow did not complete successfully'
     foreach ($name in $requiredJobs) {
@@ -65,7 +65,7 @@ function WriteJson($path, $value) {
 }
 if ($Mode -eq 'SelfTest') {
     $cases = 0
-    foreach ($repo in @('arisewanggithub/ScrcpySend','arisewanggithub/ScrcpyRecv')) {
+    foreach ($repo in @('arisewanggithub/ScrcpySend','arisewanggithub/ScrcpyReceive')) {
         $sha = 'a' * 40; $head = 'b' * 40; $tree = 'c' * 40
         $pr = [pscustomobject]@{ number=7; merged_at='2026-01-01'; merge_commit_sha=$sha; base=@{ref='main';repo=@{full_name=$repo}}; head=@{sha=$head} }
         $run = [pscustomobject]@{id=123;run_attempt=1;repository=@{full_name=$repo};event='pull_request';path='.github/workflows/build-release.yml';head_sha=$head;status='completed';conclusion='success'}
@@ -107,7 +107,7 @@ if ($Mode -eq 'SelfTest') {
     Write-Output "PASS PR release validation proof: $cases acceptance/rejection fixtures"
     return
 }
-Require ($Repository -cin @('arisewanggithub/ScrcpySend','arisewanggithub/ScrcpyRecv')) 'Unsupported repository'
+Require ($Repository -cin @('arisewanggithub/ScrcpySend','arisewanggithub/ScrcpyReceive')) 'Unsupported repository'
 if ($Mode -eq 'Record') {
     Require ($env:GITHUB_EVENT_NAME -ceq 'pull_request' -and (IsId $env:GITHUB_RUN_ID) -and (IsId $env:GITHUB_RUN_ATTEMPT)) 'Proof recording is PR-only'
     $event = Get-Content -LiteralPath $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json

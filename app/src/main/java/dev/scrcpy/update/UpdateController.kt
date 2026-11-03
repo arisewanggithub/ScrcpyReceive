@@ -64,7 +64,7 @@ open class UpdateController protected constructor(
 
     init {
         require(testStorage == null || testStorage.matches(Regex("update_test_[a-z_]{1,40}")))
-        require(repository in setOf("ScrcpySend", "ScrcpyRecv"))
+        require(repository in setOf("ScrcpySend", "ScrcpyReceive"))
         prefs = requireNotNull(context.getSharedPreferences(testStorage ?: "public_release_update", Context.MODE_PRIVATE))
         val directory = File(context.cacheDir, testStorage ?: "release_update").apply { mkdirs() }
         apk = File(directory, "verified.apk")

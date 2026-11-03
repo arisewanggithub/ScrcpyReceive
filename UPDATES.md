@@ -25,7 +25,7 @@ The receiver initially focuses its passive home content, so the first remote OK 
 The production endpoints are pinned to:
 
 - `https://api.github.com/repos/arisewanggithub/ScrcpySend/releases/latest`
-- `https://api.github.com/repos/arisewanggithub/ScrcpyRecv/releases/latest`
+- `https://api.github.com/repos/arisewanggithub/ScrcpyReceive/releases/latest`
 
 Only stable, non-draft releases qualify. Each release must contain exactly one `update.json` and its exactly named APK (`ScrcpySend.apk` or `ScrcpyReceive.apk`). No PAT, credentials, device identifiers, capture details, or signing keys are sent. GitHub receives the ordinary HTTPS request metadata and public updater User-Agent. HTTP 403/429 rate limits honor bounded server cooldowns; manual retries do not bypass them.
 
@@ -33,8 +33,8 @@ Receiver releases publish only **ScrcpyReceive.apk**, with no **ScrcpyRecv.apk**
 compatibility copy. The app updater and `update.json` use the new filename.
 Older installed receiver versions require a one-time manual installation to
 migrate; use the same application ID and signing certificate to preserve data.
-Renaming the download does not change the repository, application ID, signing
-certificate, version or update verification rules.
+The repository is now `arisewanggithub/ScrcpyReceive`; its application ID,
+signing certificate, version and update verification rules are unchanged.
 
 `update.json` is at most 64 KiB and has these mandatory fields:
 

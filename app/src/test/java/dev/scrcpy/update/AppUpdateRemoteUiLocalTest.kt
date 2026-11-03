@@ -38,7 +38,7 @@ class AppUpdateRemoteUiLocalTest {
     private lateinit var installs: FakeInstalls
     private var casting = false
     private val storage = "update_test_local_ui"
-    private inner class FakeBackend : UpdateController(requireNotNull(activity.applicationContext), "ScrcpyRecv", "ScrcpyReceive.apk", storage) {
+    private inner class FakeBackend : UpdateController(requireNotNull(activity.applicationContext), "ScrcpyReceive", "ScrcpyReceive.apk", storage) {
         private var observer: Observer? = null
         var checks = 0
         var downloads = 0
@@ -352,13 +352,13 @@ class AppUpdateRemoteUiLocalTest {
             .put("signingCertificateSha256", hash).put("protocolVersion", 3)
         activity.getSharedPreferences(storage, Activity.MODE_PRIVATE).edit()
             .putString("manifest", manifest.toString())
-            .putString("apk_url", "https://github.com/arisewanggithub/ScrcpyRecv/releases/download/v2/ScrcpyReceive.apk")
+            .putString("apk_url", "https://github.com/arisewanggithub/ScrcpyReceive/releases/download/v2/ScrcpyReceive.apk")
             .putLong("last_success", System.currentTimeMillis()).commit()
         backend.apk.outputStream().use { it.write(bytes) }
         backend.verified = true; backend.beginInstall()
         val saved = ui.saveState()
         ui.stop()
-        val restored = object : UpdateController(requireNotNull(activity.applicationContext), "ScrcpyRecv", "ScrcpyReceive.apk", storage) {}
+        val restored = object : UpdateController(requireNotNull(activity.applicationContext), "ScrcpyReceive", "ScrcpyReceive.apk", storage) {}
         assertTrue(restored.installPending())
         assertTrue(restored.apk.isFile)
         assertTrue(restored.downloadReady())
