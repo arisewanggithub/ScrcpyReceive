@@ -3,9 +3,12 @@ package dev.scrcpy.update
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.SurfaceView
 import android.view.View
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.TextView
 import org.junit.After
@@ -134,6 +137,33 @@ class ReceiverMainActivityUpdateEntryTest {
         assertTrue(home().hasFocus())
         assertFalse(activity.receiverReadyForTests)
     }
+    @Test
+    @Config(qualifiers = "w360dp-h800dp-port")
+    fun firstTouchTapExitsWithoutSelectingTheButtonFirst() {
+        activity.window.addFlags(WindowManager.LayoutParams.FLAG_LOCAL_FOCUS_MODE)
+        activity.window.setLocalFocus(true, true)
+        ShadowLooper.idleMainLooper()
+        val button = exit()
+        assertTrue(button.isInTouchMode)
+        assertTrue(button.isFocusable)
+        assertFalse(button.isFocusableInTouchMode)
+        assertFalse(button.hasFocus())
+        assertTrue(home().hasFocus())
+        assertTrue(button.width > 0 && button.height > 0)
+        val started = SystemClock.uptimeMillis()
+        val down = MotionEvent.obtain(started, started, MotionEvent.ACTION_DOWN,
+            button.width / 2f, button.height / 2f, 0)
+        try { button.dispatchTouchEvent(down) } finally { down.recycle() }
+        val up = MotionEvent.obtain(started, started + 50, MotionEvent.ACTION_UP,
+            button.width / 2f, button.height / 2f, 0)
+        try { button.dispatchTouchEvent(up) } finally { up.recycle() }
+        ShadowLooper.idleMainLooper()
+        assertTrue("The first touch tap must activate Exit", activity.isFinishing)
+        assertFalse(activity.receiverReadyForTests)
+        assertFalse(button.isEnabled)
+        assertNull(ui.dialogViewForTests())
+    }
+
     @Test fun deliberateDpadNavigationStillReachesExit() {
         assertEquals(exit().id, home().nextFocusDownId)
         assertEquals(home().id, exit().nextFocusUpId)

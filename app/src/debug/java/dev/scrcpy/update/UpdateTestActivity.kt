@@ -3,6 +3,7 @@ package dev.scrcpy.update
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
+import android.view.WindowManager
 import android.widget.LinearLayout
 
 /** Non-exported debug host: instrumentation supplies in-memory backends, never URL/intent overrides. */
@@ -12,6 +13,7 @@ class UpdateTestActivity : Activity() {
     var restoredUpdateStateForTests: Bundle? = null
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         setContentView(content)
         restoredUpdateStateForTests = state?.getBundle("app_update_ui")

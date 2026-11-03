@@ -1,5 +1,6 @@
 package org.screencopy.receiver
 
+import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -8,10 +9,12 @@ import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.widget.Button
 import android.widget.TextView
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.scrcpy.update.UpdateTestActivity
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -19,6 +22,8 @@ import org.screencopy.receiver.ui.ReceiverScreen
 import org.screencopy.receiver.ui.ReceiverScreenEvent
 import org.screencopy.receiver.ui.ReceiverScreenView
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @RunWith(AndroidJUnit4::class)
 class RemoteScreenRenderingTest {
@@ -43,9 +48,9 @@ class RemoteScreenRenderingTest {
     }
 
     @Test fun portraitLandscapeTabletAndProjectorLayoutsKeepActualEndpointsAndExitReadable() {
-        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+        withRemoteHost { host ->
             for ((width, height) in listOf(360 to 800, 800 to 360, 1280 to 800, 1920 to 1080)) {
-                val base = InstrumentationRegistry.getInstrumentation().targetContext
+                val base = host
                 val configuration = Configuration(base.resources.configuration).apply {
                     orientation = if (width > height) Configuration.ORIENTATION_LANDSCAPE else Configuration.ORIENTATION_PORTRAIT
                     screenWidthDp = width
@@ -55,6 +60,7 @@ class RemoteScreenRenderingTest {
                 }
                 val context = ContextThemeWrapper(base.createConfigurationContext(configuration), R.style.ReceiverTheme)
                 val root = LayoutInflater.from(context).inflate(R.layout.activity_receiver, null) as ViewGroup
+                host.setContentView(root)
                 val exits = AtomicInteger()
                 val renderer = ReceiverScreenView(root) { exits.incrementAndGet() }
                 val ips = listOf("192.168.100.200:65535", "10.0.0.5:46756")
@@ -74,9 +80,12 @@ class RemoteScreenRenderingTest {
                 assertEquals("Ready", root.findViewById<TextView>(R.id.status_label).text.toString())
                 assertEquals(displayedEndpoints.joinToString("\n"), root.findViewById<TextView>(R.id.receiver_addresses).text.toString())
                 val exit = root.findViewById<Button>(R.id.exit_receiver)
+                assertTrue(root.isAttachedToWindow)
                 assertTrue(exit.isFocusable)
+                assertFalse(exit.isFocusableInTouchMode)
+                assertFalse(exit.isInTouchMode)
                 assertTrue(exit.height >= (48 * density).toInt())
-                exit.requestFocus()
+                assertTrue(exit.requestFocus())
                 assertTrue(exit.isFocused)
                 exit.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER))
                 exit.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER))
@@ -88,7 +97,8 @@ class RemoteScreenRenderingTest {
                 assertEquals(View.VISIBLE, root.findViewById<View>(R.id.video_surface).visibility)
                 renderer.render(ready.reduce(ReceiverScreenEvent.Problem("AUDIO_FAILED")).reduce(ReceiverScreenEvent.CleanupFinished))
                 assertEquals(View.VISIBLE, root.findViewById<View>(R.id.error_message).visibility)
-                assertTrue(exit.isFocused)
+                assertTrue(root.findViewById<View>(R.id.waiting_content).hasFocus())
+                assertFalse(exit.isFocused)
                 val bitmap = Bitmap.createBitmap(pixelsWide, pixelsHigh, Bitmap.Config.ARGB_8888)
                 try {
                     root.draw(Canvas(bitmap))
@@ -120,20 +130,52 @@ class RemoteScreenRenderingTest {
     }
 
     @Test fun exitSupportsEnterAndTerminalStateRejectsFurtherFocusActivation() {
-        InstrumentationRegistry.getInstrumentation().runOnMainSync {
-            val base = InstrumentationRegistry.getInstrumentation().targetContext
+        withRemoteHost { host ->
+            val base = host
             val root = LayoutInflater.from(ContextThemeWrapper(base, R.style.ReceiverTheme)).inflate(R.layout.activity_receiver, null)
+            host.setContentView(root)
+            val metrics = base.resources.displayMetrics
+            root.measure(View.MeasureSpec.makeMeasureSpec(metrics.widthPixels, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(metrics.heightPixels, View.MeasureSpec.EXACTLY))
+            root.layout(0, 0, metrics.widthPixels, metrics.heightPixels)
             val exits = AtomicInteger()
             val renderer = ReceiverScreenView(root) { exits.incrementAndGet() }
             val ready = ReceiverScreen().reduce(ReceiverScreenEvent.Listener(listOf("10.0.0.8:46756")))
             renderer.render(ready)
             val exit = root.findViewById<Button>(R.id.exit_receiver)
-            exit.requestFocus()
+            assertTrue(root.isAttachedToWindow)
+            assertFalse(exit.isInTouchMode)
+            assertTrue(exit.requestFocus())
             exit.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
             exit.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
             assertEquals(1, exits.get())
             renderer.render(ready.reduce(ReceiverScreenEvent.Exit))
             assertFalse(exit.isEnabled)
+        }
+    }
+    private fun withRemoteHost(action: (UpdateTestActivity) -> Unit) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val host = instrumentation.startActivitySync(Intent(instrumentation.targetContext, UpdateTestActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as UpdateTestActivity
+        val focused = CountDownLatch(1)
+        val listener = ViewTreeObserver.OnWindowFocusChangeListener { hasFocus -> if (hasFocus) focused.countDown() }
+        try {
+            instrumentation.runOnMainSync {
+                val decor = host.window.decorView
+                decor.viewTreeObserver.addOnWindowFocusChangeListener(listener)
+                if (decor.hasWindowFocus()) focused.countDown()
+            }
+            assertTrue("Remote rendering tests require an unlocked, focused host window",
+                focused.await(5, TimeUnit.SECONDS))
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_UP)
+            instrumentation.waitForIdleSync()
+            instrumentation.runOnMainSync { action(host) }
+        } finally {
+            instrumentation.runOnMainSync {
+                val observer = host.window.decorView.viewTreeObserver
+                if (observer.isAlive) observer.removeOnWindowFocusChangeListener(listener)
+                host.finish()
+            }
         }
     }
 }

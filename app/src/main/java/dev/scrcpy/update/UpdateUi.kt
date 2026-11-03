@@ -326,7 +326,8 @@ class UpdateUi internal constructor(
         text = label
         setTextColor(Color.BLACK)
         isFocusable = true
-        isFocusableInTouchMode = true
+        // Touch taps click immediately; D-pad input still uses normal focus.
+        isFocusableInTouchMode = false
         background = StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_focused), shape(Color.rgb(255, 221, 112), Color.BLACK, 4))
             addState(intArrayOf(android.R.attr.state_pressed), shape(Color.rgb(255, 221, 112), Color.BLACK, 4))

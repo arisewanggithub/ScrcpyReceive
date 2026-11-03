@@ -3,9 +3,13 @@ package dev.scrcpy.update
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.os.SystemClock
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.TextView
 import org.json.JSONObject
@@ -23,6 +27,7 @@ import org.robolectric.annotation.ConscryptMode
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.LooperMode
 import org.robolectric.shadows.ShadowLooper
+import org.robolectric.shadows.ShadowAlertDialog
 import java.security.MessageDigest
 
 @RunWith(RobolectricTestRunner::class)
@@ -219,6 +224,50 @@ class AppUpdateRemoteUiLocalTest {
     private fun result(code: Int, data: Intent? = null) {
         Shadows.shadowOf(activity).receiveResult(requireNotNull(installs.intent), code, data)
         ShadowLooper.idleMainLooper()
+    }
+    private fun localInputMode(window: Window, touch: Boolean) {
+        window.addFlags(WindowManager.LayoutParams.FLAG_LOCAL_FOCUS_MODE)
+        window.setLocalFocus(true, touch)
+        ShadowLooper.idleMainLooper()
+    }
+    private fun tap(window: Window, prefix: String) {
+        localInputMode(window, true)
+        val target = find(window.decorView, prefix)
+        assertTrue(target.isInTouchMode)
+        assertFalse(target.isFocusableInTouchMode)
+        assertTrue(target.width > 0 && target.height > 0)
+        val started = SystemClock.uptimeMillis()
+        val down = MotionEvent.obtain(started, started, MotionEvent.ACTION_DOWN,
+            target.width / 2f, target.height / 2f, 0)
+        try { target.dispatchTouchEvent(down) } finally { down.recycle() }
+        val up = MotionEvent.obtain(started, started + 50, MotionEvent.ACTION_UP,
+            target.width / 2f, target.height / 2f, 0)
+        try { target.dispatchTouchEvent(up) } finally { up.recycle() }
+        ShadowLooper.idleMainLooper()
+    }
+    @Test fun nativeSingleTouchTapActivatesAndRemoteFocusCanResume() {
+        tap(activity.window, "Check")
+        assertEquals(1, backend.checks)
+        tap(checkNotNull(ShadowAlertDialog.getLatestAlertDialog().window), "Later")
+        assertNull(ui.dialogViewForTests())
+        assertEquals(0, backend.downloads)
+        tap(activity.window, "Check")
+        assertEquals(2, backend.checks)
+        val dialog = checkNotNull(ShadowAlertDialog.getLatestAlertDialog().window)
+        tap(dialog, "Download and install")
+        assertEquals(1, backend.downloads)
+        assertTrue(backend.busy)
+        tap(dialog, "Later")
+        assertFalse(backend.busy)
+        assertEquals(0, installs.installs)
+        localInputMode(activity.window, false)
+        val check = find(activity.content, "Check")
+        assertFalse(check.isInTouchMode)
+        ui.focusCheck()
+        assertTrue(check.hasFocus())
+        center(check)
+        assertEquals(3, backend.checks)
+        assertTrue(find(ui.dialogViewForTests(), "Download and install").hasFocus())
     }
     @Test fun nativeCenterFocusNavigationAndDownloadCancel() {
         open()
