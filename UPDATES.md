@@ -2,9 +2,14 @@
 
 ScrcpySend and ScrcpyReceive use the stable Android application IDs `dev.screencopy.sender` and `org.screencopy.receiver`, respectively. In-place upgrades preserve app data only with the same application ID and signing certificate. They are independent projects, not official scrcpy applications; upstream attribution is provided in the third-party notices.
 
-## Remote-only flow
+## Touch and remote flow
 
 Both home screens show the actual installed app version, without update status controls. Each fresh launch checks silently once; rotation and ordinary resume do not start another check. Only a successful check for a newer version opens the popup, after casting is idle. **Later** or Back dismisses it for that launch. Failed checks are logged without a popup; GitHub cooldowns still apply. The receiver has no Settings/update entry. Sender capture Settings still provides a manual check. D-pad/Center/OK navigation has visible focus.
+
+Touch taps activate buttons on the first tap; they do not first select them.
+Buttons retain normal focus for D-pad/keyboard navigation but are not focusable
+in Android touch mode. Android switches between these input modes automatically,
+including when a remote and touchscreen are used on the same device.
 
 The popup has exactly two actions: **Download and install update** and **Later**. One explicit primary-action press downloads, verifies, and opens Android's installer when permitted and idle. The same primary button represents install permission or retry when needed. Later/Back also cancels an in-flight download. Consent survives rotation within the running process, never process restart or a fresh launch. Partial files are never installable. After a user-initiated installation attempt, the completed APK is retained across process restart but must be verified again on explicit retry.
 
@@ -19,6 +24,10 @@ Installer launch requests a standard activity result (`EXTRA_RETURN_RESULT`, req
 A new check, download, or verification takes precedence over historical installer status. Completed installer outcomes are cleared before that operation, including cooldown/retry errors, while a genuinely pending installer record is preserved. Verification errors remove the invalid APK and show the fresh verification error rather than an old cancellation message. Retention messages check whether the APK actually exists; activity recreation cannot revive a cleared old outcome.
 
 The receiver initially focuses its passive home content, so the first remote OK cannot accidentally activate Exit. Down/Right deliberately selects Exit; Up/Left returns home. Back closes the update popup without closing the receiver. The landscape address/status composition remains intact.
+
+Exit activates on the first touchscreen tap. It remains focusable for deliberate
+D-pad/Enter activation, but does not take focus first in touch mode. Passive home
+focus and the safe initial remote-OK behavior are unchanged in both layouts.
 
 ## Public release contract
 
