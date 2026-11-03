@@ -471,6 +471,8 @@ class AppUpdateRemoteUiTest {
         instrumentation.runOnMainSync { backend.verified = true; backend.busy = false; backend.emit() }
         awaitInstalled(1)
         assertFalse(backend.finishUpdateRequested)
+        instrumentation.waitForIdleSync()
+        awaitUi("home window restored after touch installation") { activity.window.decorView.hasWindowFocus() }
         instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_UP)
         instrumentation.waitForIdleSync()
         instrumentation.runOnMainSync { ui.focusCheck() }

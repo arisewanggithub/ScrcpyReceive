@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -183,7 +184,11 @@ class UpdateUi internal constructor(
         details = text(body, "")
         val actionButton = button(body, "Download and install update", ::act).also { action = it }
         val cancelButton = button(body, "Later", ::later).also { cancel = it }
-        val scroll = ScrollView(activity).apply { addView(body) }
+        val scroll = ScrollView(activity).apply {
+            descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+            isFocusable = false
+            addView(body)
+        }
         val current = AlertDialog.Builder(activity).setTitle("App updates").setView(scroll).create()
         dialog = current
         current.setOnCancelListener {
@@ -192,7 +197,12 @@ class UpdateUi internal constructor(
         current.setOnDismissListener { if (dialog === current) dialog = null }
         current.show()
         render()
-        (if (!controller.busy && controller.available()) actionButton else cancelButton).requestFocus()
+        val initialFocus = if (!controller.busy && controller.available()) actionButton else cancelButton
+        initialFocus.requestFocus()
+        initialFocus.post {
+            if (dialog === current && !initialFocus.isInTouchMode)
+                (if (actionButton.isEnabled) actionButton else cancelButton).requestFocus()
+        }
     }
     private fun later() {
         controller.finishUpdateRequested = false
