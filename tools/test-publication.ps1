@@ -41,15 +41,15 @@ Assert $releaseBlock.Success 'Explicit release build type missing'
 Assert ($releaseBlock.Groups['body'].Value -match 'isMinifyEnabled = true' -and $releaseBlock.Groups['body'].Value -match 'isShrinkResources = true') 'Release must enable R8 and resource shrinking'
 Assert ($releaseBlock.Groups['body'].Value -match 'getDefaultProguardFile\("proguard-android-optimize.txt"\)' -and $releaseBlock.Groups['body'].Value -match '"proguard-rules.pro"') 'Release must register optimized defaults and custom rules'
 $rules = Get-Content -LiteralPath (Join-Path $root 'app/proguard-rules.pro') -Raw
-foreach ($type in @('org.screencopy.receiver.media.SrtNative', 'org.screencopy.receiver.media.OpusDecoder')) {
+foreach ($type in @('org.screencopy.receiver.media.OpusDecoder')) {
     Assert ($rules.Contains("class $type {")) "JNI declaring class missing: $type"
 }
-Assert ([regex]::Matches($rules, 'native <methods>;').Count -eq 2) 'Both JNI bindings must retain native methods'
+Assert ([regex]::Matches($rules, 'native <methods>;').Count -eq 1) 'The Opus JNI binding must retain native methods'
 Assert ($rules -notmatch '(?m)^-(dontwarn|dontobfuscate|dontoptimize)\b|(?m)^-keep[^\r\n]*class [^\r\n]*\*') 'Custom rules must not blanket-keep packages or suppress R8 failures'
 $mainManifest = Get-Content (Join-Path $root 'app/src/main/AndroidManifest.xml') -Raw
 $debugManifest = Get-Content (Join-Path $root 'app/src/debug/AndroidManifest.xml') -Raw
 Assert ($mainManifest -notmatch 'UpdateTestActivity' -and $debugManifest -match 'UpdateTestActivity') 'Updater test Activity must remain debug-only'
-Assert ($workflow -match ':app:assembleRelease -PsrtTrial=\$\{\{ matrix.srt \}\} -PrequireReleaseSigning=false') 'Both profiles need unsigned optimized release compilation before publication'
+Assert ($workflow -match ':app:assembleRelease -PrequireReleaseSigning=false') 'Unsigned optimized release compilation is required before publication'
 Assert ($workflow -match 'path: app/build/outputs/mapping/release/mapping.txt') 'Exact signed-release mapping must be retained outside public release assets'
 Assert ($appBuild -match 'gradleProperty\("releaseSmokeTest"\).map \{ it.toBooleanStrict\(\) \}' -and $appBuild -match '!releaseSmokeTest \|\| \(!requireReleaseSigning && !productionSigningConfigured\)') 'Strict smoke/publication signing exclusion missing'
 Assert ($appBuild -match 'signingConfig = signingConfigs.getByName\("debug"\)') 'Explicit release test signing configuration missing'
@@ -72,8 +72,8 @@ Assert ($rules -notmatch 'javax.lang.model') 'Compiler model suppression must ne
 Assert ($testRules -match '(?m)^-repackageclasses dev.scrcpy.releasecheck.internal' -and $rules -notmatch 'keep[^\r\n]*kotlin') 'Harness runtime must be isolated without production Kotlin keeps'
 Assert ($workflow -match '-PrequireReleaseSigning=true -PreleaseSmokeTest=false') 'Publisher must explicitly disable smoke signing'
 $smokeScript = Get-Content (Join-Path $PSScriptRoot 'run-release-smoke.sh') -Raw
-Assert ($smokeScript -match 'NativeSrtCheck,dev.scrcpy.releasecheck.NativeOpusCheck,dev.scrcpy.releasecheck.TargetResourcesCheck' -and $smokeScript -notmatch 'AppUpdateRemoteUiTest|connectedAndroidTest') 'Release smoke must select only standalone checks'
-Assert ($smokeScript -match 'bash tools/check-instrumentation-result.sh' -and $smokeScript -match 'expected=6') 'Smoke must use the tested result checker and exact count'
+Assert ($smokeScript -match 'NativeOpusCheck,dev.scrcpy.releasecheck.TargetResourcesCheck' -and $smokeScript -notmatch 'AppUpdateRemoteUiTest|connectedAndroidTest') 'Release smoke must select only standalone checks'
+Assert ($smokeScript -match 'bash tools/check-instrumentation-result.sh' -and $smokeScript -match 'expected=3') 'Smoke must use the tested result checker and exact count'
 $resultChecker = Get-Content (Join-Path $PSScriptRoot 'check-instrumentation-result.sh') -Raw
 Assert ($resultChecker.Contains('^INSTRUMENTATION_STATUS_CODE: 0$') -and $resultChecker.Contains('^INSTRUMENTATION_CODE: -1$') -and $resultChecker -match 'INSTRUMENTATION_STATUS_CODE: -\[234\]') 'Per-test success is 0; final success is -1; failures/skips must remain rejected'
 $parserBash = if ($env:OS -eq 'Windows_NT') {
@@ -86,15 +86,13 @@ Assert ($LASTEXITCODE -eq 0) 'CI AVD userdata policy fixtures failed'
 Assert ($workflow -match 'bash tools/set-ci-avd-userdata.sh "\$ANDROID_AVD_HOME/update-ui.avd/config.ini"') 'Updater UI AVD must also receive the bounded userdata config'
 Assert ($workflow.IndexOf('create avd --force --name update-ui') -lt $workflow.IndexOf('bash tools/set-ci-avd-userdata.sh "$ANDROID_AVD_HOME/update-ui.avd/config.ini"')) 'Updater userdata config must follow its AVD creation'
 Assert ($smokeScript.IndexOf('create avd') -lt $smokeScript.IndexOf('bash tools/set-ci-avd-userdata.sh') -and $smokeScript.IndexOf('bash tools/set-ci-avd-userdata.sh') -lt $smokeScript.IndexOf('"$ANDROID_HOME/emulator/emulator" -avd')) 'CI userdata sizing must precede emulator launch and follow AVD creation'
-$nativeCheck = Get-Content (Join-Path $root 'release-check/src/main/java/dev/scrcpy/releasecheck/NativeSrtCheck.kt') -Raw
-Assert ($nativeCheck -match 'does not match the accepted control session' -and $nativeCheck -match 'has not connected' -and $nativeCheck -notmatch 'assertThrows\(ExecutionException') 'Wrong-SID proof must validate listener rejection/unusable I/O, not race-dependent caller failure'
 $smokeTestCount = 0
 foreach ($file in (Get-ChildItem (Join-Path $root 'release-check/src/main') -Recurse -File -Filter '*.kt')) {
     $content = Get-Content $file.FullName -Raw
     Assert ($content -notmatch 'import (dev\.screencopy\.sender|org\.screencopy\.receiver|org\.conscrypt|org\.bouncycastle|io\.github\.muntashirakon)') 'Harness must reflect target code, never compile app implementation'
     $smokeTestCount += [regex]::Matches($content, '@Test\s+fun\s+').Count
 }
-Assert ($smokeTestCount -eq 6) 'Standalone Receiver cohort must have exactly six tests'
+Assert ($smokeTestCount -eq 3) 'Standalone Receiver cohort must have exactly three tests'
 $runner = Get-Content (Join-Path $root 'release-check/src/main/java/dev/scrcpy/releasecheck/ReleaseCheckRunner.kt') -Raw
 $target = Get-Content (Join-Path $root 'release-check/src/main/java/dev/scrcpy/releasecheck/TargetApp.kt') -Raw
 Assert ($runner -match 'releaseSmoke' -and $runner -match 'Build.VERSION.SDK_INT == 35' -and $target -match 'FLAG_DEBUGGABLE' -and $target -match 'loader !== harness.classLoader') 'Independent target loader and emulator/non-debuggable guards required'
@@ -103,7 +101,7 @@ $smokeJob = [regex]::Match($workflow, '(?ms)^  optimized-native-smoke:.*?(?=^  p
 Assert ($smokeJob -match 'releaseSmokeTest=true' -and $smokeJob -notmatch 'secrets\.|publication\.keystore|release upload') 'Smoke job must not use production signing or publication'
 Assert ($smokeJob -match ':release-check:assembleRelease' -and $smokeJob -notmatch ':app:assembleReleaseAndroidTest') 'Optimized CI must build the standalone APK, not the retired shared-runtime test APK'
 Assert ($workflow -notmatch 'pull_request_target|connectedAndroidTest|adb connect') 'Unsafe CI trigger/device test'
-Assert ($workflow -match "srt: \['false', 'true'\]") 'Both transport build modes must be checked'
+Assert ($workflow -notmatch '(?m)^\s+matrix:') 'The receiver has one custom TCP transport build'
 Assert ($workflow -match 'requireReleaseSigning=true') 'Publication signing guard missing'
 Assert ($workflow -match '-e class dev\.scrcpy\.update\.AppUpdateRemoteUiTest ') 'Only the agreed remote UI instrumentation class may run'
 Assert ($workflow -match '(?m)^  publish:\r?\n    needs: \[verify-validation\]') 'Release must depend on verified PR evidence, not repeat PR jobs'

@@ -5,7 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-$requiredJobs = @('checks (false)', 'checks (true)',
+$requiredJobs = @('checks',
     'Remote update UI only (ephemeral API35 emulator)',
     'Optimized release runtime (disposable API35 emulator)', 'Validated PR source proof')
 function Require($condition, $message) { if (!$condition) { throw $message } }
@@ -87,7 +87,7 @@ if ($Mode -eq 'SelfTest') {
                 'wrong-head' { $r.head_sha='f'*40 }
                 'push-run' { $r.event='push' }
                 'failed-run' { $r.conclusion='failure' }
-                'missing-job' { $j=@($j | Select-Object -First 4) }
+                'missing-job' { $j=@($j | Select-Object -First ($requiredJobs.Count - 1)) }
                 'skipped-job' { $j[0].conclusion='skipped' }
                 'duplicate-job' { $j += $j[0] }
                 'missing-artifact' { $a=$null }

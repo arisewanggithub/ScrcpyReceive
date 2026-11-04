@@ -7,8 +7,8 @@ for variable in ANDROID_KEYSTORE_PATH ANDROID_KEYSTORE_BASE64 ANDROID_KEY_ALIAS 
 done
 application_id=org.screencopy.receiver
 harness_id=dev.scrcpy.releasecheck.receiver
-classes=dev.scrcpy.releasecheck.NativeSrtCheck,dev.scrcpy.releasecheck.NativeOpusCheck,dev.scrcpy.releasecheck.TargetResourcesCheck
-expected=6
+classes=dev.scrcpy.releasecheck.NativeOpusCheck,dev.scrcpy.releasecheck.TargetResourcesCheck
+expected=3
 app=app/build/outputs/apk/release/app-release.apk
 mapfile -t harness_apks < <(find release-check/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk')
 [[ "${#harness_apks[@]}" == 1 ]] || { echo "Standalone harness must produce exactly one APK"; exit 1; }

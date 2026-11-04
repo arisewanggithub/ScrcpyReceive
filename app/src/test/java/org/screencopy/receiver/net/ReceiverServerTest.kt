@@ -22,6 +22,36 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class ReceiverServerTest {
+    @Test fun externalTransportDescriptorsAreRejectedBeforeAcceptanceAndCannotFallBackToTcp() {
+        val validated = AtomicInteger()
+        ReceiverServer.forProtocolTests("Receiver", validateRequest = { validated.incrementAndGet() }).use { server ->
+            server.start()
+            val descriptors = listOf(JSONObject().put("kind", "external"), JSONObject(), JSONObject.NULL, "external", false)
+            descriptors.forEachIndexed { index, descriptor ->
+                connect(server).use { peer ->
+                    hello(peer)
+                    send(peer, Type.SESSION_REQUEST, settings().put("mediaTransport", descriptor), index + 1L)
+                    val rejection = read(peer)
+                    assertEquals(Type.REJECT, rejection.type)
+                    assertEquals("UNSUPPORTED_CONFIG", rejection.json().string("code"))
+                    assertEquals(-1, peer.inputStream.read())
+                }
+                await { !server.busyForUpdate }
+            }
+            assertEquals("An external transport must not reach codec validation or acceptance", 0, validated.get())
+            connect(server).use { peer ->
+                hello(peer)
+                send(peer, Type.SESSION_REQUEST, settings(), 99)
+                val accepted = read(peer)
+                assertEquals(Type.SESSION_ACCEPT, accepted.type)
+                assertFalse(accepted.json().has("mediaTransport"))
+                assertEquals(1, validated.get())
+                send(peer, Type.STOP, JSONObject().put("reason", "done"), 99)
+                assertEquals(Type.SESSION_END, read(peer).type)
+            }
+        }
+    }
+
     @Test fun listenerScreenShowsActualBoundPortAndRenamedDiscoveryLabel() {
         val events = ConcurrentLinkedQueue<ReceiverScreenEvent>()
         val descriptions = ConcurrentLinkedQueue<String>()

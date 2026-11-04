@@ -1,9 +1,8 @@
 # ScrcpyReceive
 
 Android receiver for [ScrcpySend](https://github.com/arisewanggithub/ScrcpySend)
-on a trusted family LAN. **SRT / fragmented MP4** playback uses **libsrt1.5.7**
-for transport and **Media3 ExoPlayer1.11.1** for extraction, codecs and timing.
-A **custom TCP** compatibility path uses MediaCodec and AudioTrack directly.
+on a trusted family LAN. **Custom TCP** is the only supported media transport,
+using MediaCodec and AudioTrack directly.
 These are independent applications, not official scrcpy applications.
 
 The Android app and release download are named **ScrcpyReceive** and
@@ -17,18 +16,16 @@ identify internal resources.
 
 ## Architecture and supported formats
 
-- SRT supports **H.264, H.265 or AV1**, with **Opus, AAC-LC or audio off**.
-  Media3 handles the standard fragmented MP4 container and playback clocks;
-  libsrt supplies a cancellable transport, not an alternative decoder.
-- Custom TCP supports the negotiated video formats plus Opus/AAC/PCM audio.
+- Custom TCP supports **H.264, H.265 or AV1**, plus **Opus, AAC-LC, PCM or audio off**.
   Bundled **libopus1.5.2** handles Opus initialization, pre-skip, gain and decode.
 - Selected settings and actual codec metadata are validated before admission.
   Unsupported codecs/configurations fail explicitly; requested audio is not
   silently disabled, and media is not silently converted to another transport.
-- Debug and release builds include SRT and custom TCP by default; SRT needs no
-  opt-in flag. The legacy `srtTrial` build-option name is retained for script
-  compatibility, not to designate SRT as experimental. `-PsrtTrial=false`
-  explicitly selects the TCP-only compatibility-test profile.
+- Debug and release builds support custom TCP only. External media transport
+  descriptors are rejected explicitly before session acceptance.
+- Discovery/HELLO do not advertise transport capabilities. Existing senders may
+  still offer other transports; select custom TCP for this receiver. This
+  receiver-only change does not hide options in the sender.
 - The waiting screen is replaced by aspect-fit video only after actual rendered
   video and the required audio readiness. A socket connection alone is not
   playback success.
@@ -46,7 +43,7 @@ No upstream C implementation is copied.
 
 - Decoded audio has a **50-ms target FIFO**, distinct from the **5-ms requested
   device-output buffer**. Android's real minimum and whole-frame/rate headroom
-  can require a larger output; TCP capacity and SRT's effective output size are
+  can require a larger output; TCP capacity is
   validated against the existing 130-ms route ceiling and logged, not represented as 5 ms. TCP's initial 50-ms
   preroll is the audio target, not an additional video buffer.
   Native rate preparation may retry once at that existing ceiling if the
@@ -64,36 +61,12 @@ No upstream C implementation is copied.
 - Buffering is smoothed, with silence/overflow changes accounted separately.
   Compensation is recomputed once per second over a four-second horizon,
   bounded to **+/-2%**, and never accelerates while instantaneous FIFO occupancy
-  is below target. TCP uses validated pitch-preserving AudioTrack parameters;
-  SRT uses Media3's Sonic processing rather than adding FFmpeg/libswresample.
+  is below target. TCP uses validated pitch-preserving AudioTrack parameters.
 - Video is presented without an audio-master wait or an added video buffer.
-  TCP replaces superseded decoded pictures; SRT releases decoded pictures to
-  the Surface's current presentation/vsync instead of waiting for audio.
+  TCP replaces superseded decoded pictures before presentation.
   Compressed dependencies are still decoded, never arbitrarily dropped to a keyframe.
-  SRT uses Media3's force-release hook with the real playback position; replacing
-  that position with a held frame's PTS would freeze its post-start release gate.
-  Force-release does not bypass decoded late-frame dropping during catch-up.
-  Media3's sparse-picture refresh and last-frame protection remain enabled,
-  and lateness accounts for a nonzero initial capture timestamp.
-- SRT retains Media3 demux/codec/output ownership, with shared decoded PCM
-  regulation and nominal 50--250-ms load-control settings (reduced from 100--1000 ms).
-  Pinned Media3 enforces a 500-ms minimum loading floor internally; this is
-  separate from the decoded FIFO/output bounds and is not a fixed playout delay.
-  `srt-playing` still requires actual video presentation and real source-audio
-  advancement when audio is enabled; player readiness or inserted silence is
-  not proof. Native stream/output failures stay explicit.
-  Media3's global playback/loading cursor uses its standalone monotonic clock,
-  not the source-only audio counter, so recovery silence cannot deadlock loading.
-  Source-audio advancement remains measured separately for readiness/diagnostics.
-  Future decoded audio is backpressured at the codec output beyond the 50-ms
-  scheduling horizon; decoder read-ahead is not a late burst to discard.
-  That horizon is anchored to the first real source-audio epoch, so nonzero
-  initial capture timestamps cannot block preroll on a stopped startup clock.
-  Load control excludes that empty initial timestamp interval when measuring
-  buffered media; the configured thresholds and native allocator are unchanged.
   Occupancy is sampled on input arrival, as in scrcpy, rather than repeatedly
-  sampling an empty FIFO during output polling. Unchanged Sonic rates are not
-  reapplied, avoiding needless processor drains.
+  sampling an empty FIFO during output polling.
 
 `AUDIO_REGULATION` reports FIFO occupancy/target/limit, average/rate, real source
 frames, inserted silence, dropped decoded output and source recoveries.
@@ -106,7 +79,7 @@ phone latency, audible-quality or endurance measurements.
 ## Trust and interoperability
 
 Use a reachable **trusted private LAN**. Discovery, control and media are
-unencrypted and unauthenticated; SRT encryption is disabled. Names are labels,
+unencrypted and unauthenticated. Names are labels,
 not trusted identities. The sender selects the actual UDP-source IP/TCP port,
 not an advertised redirect or matching name. Do not expose the listener to the
 internet or assume protection against LAN observers or spoofed discovery.
@@ -182,7 +155,7 @@ $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk" # Or your existing SDK locat
 .\gradlew.bat :app:checkDebugAarMetadata :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon --console plain
 ```
 
-Also check the TCP-only compatibility profile with `-PsrtTrial=false`. Debug outputs are
+Debug outputs are
 `app\build\outputs\apk\debug\app-debug.apk` and
 `app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk`.
 The optional `.\tools\interop.ps1 -SenderRoot ..\ScrcpySend` reads sender
@@ -190,7 +163,7 @@ sources without building/writing that checkout; `SCRCPY_SEND_ROOT` can
 override the sibling default.
 
 PR CI runs JVM tests, lint, debug builds and unsigned optimized release assembly
-in both profiles. Release assembly runs R8/resource shrinking before the
+for the TCP-only receiver. Release assembly runs R8/resource shrinking before the
 publisher can use signing secrets; it does not prove runtime compatibility.
 Its disposable Linux
 **API35 x86_64** emulator runs only
@@ -205,27 +178,27 @@ without uploading APKs or signing material.
 ### Release optimization
 
 Only `release` enables R8 code optimization/obfuscation and resource shrinking,
-using `proguard-android-optimize.txt` plus targeted SRT/Opus JNI declaring-class
-and native-method rules. Manifest components use AGP-generated keeps and Media3
-uses upstream AAR consumer rules. Debug/test fixtures remain unchanged; there
-are no whole app/updater/Media3 keeps or added warning suppressions. Required
+using `proguard-android-optimize.txt` plus targeted Opus JNI declaring-class
+and native-method rules. Manifest components use AGP-generated keeps.
+Debug/test fixtures remain unchanged; there
+are no whole app/updater keeps or added warning suppressions. Required
 licenses/source assets, native libraries, all three ABIs and 16 KiB link options
 are unchanged.
 
 For runner validation, in a shell with **no release-signing environment variables
-or Gradle signing properties configured**, run in both transport profiles:
+or Gradle signing properties configured**, run:
 
 ```powershell
 .\tools\test-publication.ps1
 .\gradlew.bat testDebugUnitTest lintDebug assembleDebug :app:lintRelease :app:assembleRelease -PrequireReleaseSigning=false --no-daemon --console plain
 ```
 
-Repeat with `-PsrtTrial=false`. `requireReleaseSigning=false` permits unsigned
+`requireReleaseSigning=false` permits unsigned
 assembly; it does **not** override any supplied signing configuration.
 Inspect `app\build\outputs\apk\release\app-release-unsigned.apk` and
 `app\build\outputs\mapping\release\mapping.txt`: confirm JNI declaring/method
 names, manifest components, absence of `UpdateTestActivity`, required assets
-and resources. Check SRT/Opus JNI exports and 16 KiB ELF alignment on every ABI.
+and resources. Check Opus JNI exports and 16 KiB ELF alignment on every ABI.
 AGP's release CMake variant normally uses optimized `RelWithDebInfo`; confirm
 the generated flags rather than forcing global `-O3`/LTO. Opus already has its
 targeted `-O2` setting.
@@ -245,8 +218,8 @@ shell with no production signing variables/properties:
 ```
 
 The strict property defaults to false. Smoke mode rejects publication signing,
-any supplied production-signing configuration (even empty/masked paths), and
-non-SRT builds. It changes only the app release signer and conditionally includes
+and any supplied production-signing configuration (even empty/masked paths).
+It changes only the app release signer and conditionally includes
 the `release-check` module; the app's normal debug AndroidTest cohort is untouched.
 The standalone `com.android.test` module uses AGP's self-instrumenting mode:
 no app compile dependency/mapping or runtime dependency subtraction. Its Kotlin
@@ -254,8 +227,7 @@ runtime is independently minified/repackaged, not borrowed from the optimized ap
 All app code is invoked through the actual target package's distinct classloader.
 The harness contains no app implementations or native libraries.
 
-**Optimized coverage: six tests** — three actual SRT JNI loopback/cancellation/
-stale-handle tests, two actual Opus JNI decode/error tests, and one actual manifest
+**Optimized coverage: three tests** — two actual Opus JNI decode/error tests, and one actual manifest
 resource/launcher check. CI separately launches the real app process without
 starting playback and verifies it survives startup. The original debug
 instrumentation tests remain available separately; their higher-level pipeline
@@ -348,10 +320,9 @@ and distribution obligations; the exporter invents no original-code license
 and does not require one for technical source export.
 
 Preserve all notices and required matching sources with distribution.
-`third_party\opus-1.5.2.tar.gz` and `third_party\srt-1.5.7.tar.gz` have adjacent
-SHA-256 pins enforced by CMake. Notices/license materials remain in the archives
-and APK, including [OPUS-NOTICE.txt](app/src/main/assets/OPUS-NOTICE.txt) and
-[SRT-NOTICE.txt](app/src/main/assets/SRT-NOTICE.txt).
-Media3 and other components retain their own terms. Distributors must supply
+`third_party\opus-1.5.2.tar.gz` has an adjacent
+SHA-256 pin enforced by CMake. Notices/license materials remain in the archive
+and APK, including [OPUS-NOTICE.txt](app/src/main/assets/OPUS-NOTICE.txt).
+Other components retain their own terms. Distributors must supply
 the necessary notices/license texts and corresponding sources; codec patents,
 store policy and legal/security review remain separate from successful builds.

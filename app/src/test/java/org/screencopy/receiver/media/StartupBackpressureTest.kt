@@ -3,6 +3,7 @@ package org.screencopy.receiver.media
 import org.junit.Assert.*
 import org.junit.Test
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -48,9 +49,13 @@ class StartupBackpressureTest {
                 now.addAndGet(20_000_000)
                 Thread.sleep(3)
             }
-            await { output.written.get() == 15 * 1920 || errors.isNotEmpty() }
+            await {
+                now.addAndGet(5_000_000)
+                output.sourceSamples(15) == 1920 || errors.isNotEmpty()
+            }
             assertTrue(errors.toString(), errors.isEmpty())
-            assertEquals(15 * 1920, output.written.get())
+            assertEquals(1920, output.sourceSamples(15))
+            assertTrue(player.sourceSubmittedFrames in 1..15 * 960L)
         } finally {
             resume.countDown()
             player.close()
@@ -117,9 +122,13 @@ class StartupBackpressureTest {
             assertEquals(0L, live.count)
             repeat(50) { now.addAndGet(20_000_000); cadence.release(); Thread.sleep(3) }
             burst.get(1, TimeUnit.SECONDS)
-            await { output.written.get() == 45 * 1920 && displayed.get() == 44 || failures.isNotEmpty() }
+            await {
+                now.addAndGet(5_000_000)
+                output.sourceSamples(45) == 1920 && displayed.get() == 44 || failures.isNotEmpty()
+            }
             assertTrue(failures.toString(), failures.isEmpty())
-            assertEquals(45 * 1920, output.written.get())
+            assertEquals(1920, output.sourceSamples(45))
+            assertTrue(audio.sourceSubmittedFrames in 1..45 * 960L)
             assertEquals(44, displayed.get())
         } finally {
             resume.countDown()
@@ -214,7 +223,8 @@ class StartupBackpressureTest {
         override fun release() {}
     }
 
-    private fun packet(index: Int) = AccessUnit(1_000_000L + index * 20_000L, ByteArray(3840))
+    private fun packet(index: Int) = AccessUnit(1_000_000L + index * 20_000L,
+        ByteArray(3840) { if (it % 2 == 0) (index + 1).toByte() else 0 })
 
     private fun await(condition: () -> Boolean) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
@@ -225,6 +235,8 @@ class StartupBackpressureTest {
     private class BoundedOutput(private val now: AtomicLong) : AudioOutput {
         val written = AtomicInteger()
         val closed = AtomicBoolean()
+        private val sourceSamples = ConcurrentHashMap<Int, AtomicInteger>()
+        fun sourceSamples(marker: Int): Int = sourceSamples[marker]?.get() ?: 0
         private var startNs = 0L
         private var playing = false
         override val underrunCount = 0
@@ -238,6 +250,8 @@ class StartupBackpressureTest {
         override fun write(samples: ShortArray, offset: Int, count: Int): Int {
             val buffered = written.get() - positionUs() * 96000 / 1_000_000
             val accepted = minOf(count, (11520 - buffered).coerceAtLeast(0).toInt())
+            if (accepted > 0 && samples[offset] > 0)
+                sourceSamples.computeIfAbsent(samples[offset].toInt()) { AtomicInteger() }.addAndGet(accepted)
             written.addAndGet(accepted)
             return accepted
         }

@@ -16,10 +16,6 @@ import android.widget.FrameLayout
 import org.screencopy.receiver.lifecycle.ReceiverWork
 import org.screencopy.receiver.lifecycle.ResourceSlot
 import org.screencopy.receiver.media.VideoPlayer
-import org.screencopy.receiver.media.SrtPlayback
-import org.screencopy.receiver.media.SrtPlayer
-import org.screencopy.receiver.media.SrtNative
-import org.screencopy.receiver.media.startsWithAnyFixtureScheme
 import org.screencopy.receiver.net.ReceiverServer
 import org.screencopy.receiver.ui.ReceiverLayout
 import org.screencopy.receiver.ui.ReceiverScreen
@@ -51,14 +47,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     @Volatile private var server: ReceiverServer? = null
     internal val receiverReadyForTests: Boolean get() = server != null
     @Volatile private var videoOutput: ResourceSlot<VideoPlayer>? = null
-    @Volatile private var srtOutput: ResourceSlot<SrtPlayback>? = null
-    @Volatile private var srtPlayerForTests: SrtPlayer? = null
-    @Volatile internal var srtFixtureUriForTests: String? = null
-        set(value) {
-            check(BuildConfig.DEBUG && (value == null || value.startsWithAnyFixtureScheme()))
-            field = value
-        }
-    internal fun srtDiagnosticsForTests(): String = srtPlayerForTests?.poll().orEmpty()
     @Volatile private var active = false
     @Volatile private var exiting = false
     private var surfaceReady = false
@@ -191,7 +179,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun startReceiver() {
         if (!active || exiting || isFinishing || !surfaceReady) return
         val output = videoOutput ?: ResourceSlot<VideoPlayer>().also { videoOutput = it }
-        val trialOutput = srtOutput ?: ResourceSlot<SrtPlayback>().also { srtOutput = it }
         worker.execute {
             if (!active || exiting || output.isClosed || !surface.holder.surface.isValid || server != null) return@execute
             try {
@@ -202,20 +189,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                         ui(output) { aspect = width.toDouble() / height; fitVideo() }
                     },
                     videoOutput = output,
-                    srtOutput = trialOutput,
-                    srtFactory = { settings ->
-                        SrtPlayer(applicationContext, surface.holder.surface, settings, srtFixtureUriForTests)
-                            .also { srtPlayerForTests = it }
-                    },
-                    validateSrt = {
-                        try {
-                            org.screencopy.receiver.protocol.protocolRequire(BuildConfig.SRT_TRIAL,
-                                "SRT trial unavailable", "UNSUPPORTED_CONFIG")
-                            SrtNative.version()
-                        } catch (_: LinkageError) {
-                            throw org.screencopy.receiver.protocol.ProtocolException("UNSUPPORTED_CONFIG", "SRT native transport unavailable for this ABI")
-                        }
-                    },
                     onScreenEvent = { event -> ui(output) { dispatch(event) } },
                     onPresentationStart = { mode -> beginPresentation(mode, output) }
                 ).also { it.start() }
@@ -302,10 +275,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun retireVideoOutput() {
         val output = videoOutput
         videoOutput = null
-        val trialOutput = srtOutput
-        srtOutput = null
         try {
-            try { output?.close() } finally { trialOutput?.close() }
+            output?.close()
         } catch (_: Exception) {
             dispatch(ReceiverScreenEvent.Problem("CLEANUP"))
         }

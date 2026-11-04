@@ -7,16 +7,8 @@ $required = @('.gitignore', '.github/workflows/build-release.yml', 'gradlew', 'g
     'tools/pr-validation.ps1',
     'gradle/wrapper/gradle-wrapper.jar', 'gradle/wrapper/gradle-wrapper.properties',
     'release-check/src/main/AndroidManifest.xml', 'release-check/proguard-rules.pro',
-    'release-check/src/main/java/dev/scrcpy/releasecheck/NativeSrtCheck.kt')
-if (Test-Path (Join-Path $root 'app/build.gradle')) {
-    $required += @('third_party/media3-muxer-1.11.1-sources.jar', 'third_party/media3-muxer-1.11.1-sources.sha256',
-        'third_party/srt-1.5.7.tar.gz', 'third_party/srt-1.5.7.sha256', 'THIRD_PARTY.md',
-        'app/src/main/assets/scrcpy-server-v3.3.4', 'app/src/main/assets/NOTICE.txt',
-        'app/src/main/assets/sources/spake2-2.2.1-source.zip', 'app/src/main/assets/sources/srt-1.5.7.tar.gz')
-} else {
-    $required += @('third_party/opus-1.5.2.tar.gz', 'third_party/opus-1.5.2.sha256',
-        'third_party/srt-1.5.7.tar.gz', 'third_party/srt-1.5.7.sha256')
-}
+    'release-check/src/main/java/dev/scrcpy/releasecheck/NativeOpusCheck.kt',
+    'third_party/opus-1.5.2.tar.gz', 'third_party/opus-1.5.2.sha256')
 $binaryAllowlist = @($required | Where-Object { $_ -match '\.(jar|gz|zip)$|scrcpy-server-' })
 $entries = @()
 $excluded = @()
