@@ -8,13 +8,13 @@ import java.nio.ByteOrder
 import java.util.Base64
 
 data class Request(val videoCodec: String, val audioCodec: String?, val fps: Int, val summary: String,
-    val receiverOrientation: ReceiverOrientation = ReceiverOrientation.AUTO,
-    val mediaTransport: MediaTransport? = null) {
+    val receiverOrientation: ReceiverOrientation = ReceiverOrientation.AUTO) {
     val tracks: List<Int> get() = if (audioCodec == null) listOf(1) else listOf(1, 2)
 
     companion object {
         fun parse(json: JSONObject): Request {
-            val mediaTransport = MediaTransport.parse(json)
+            protocolRequire(!json.has("mediaTransport"),
+                "Only custom TCP media is supported; omit mediaTransport", "UNSUPPORTED_CONFIG")
             val receiverOrientation = if (json.has("receiverOrientation")) ReceiverOrientation.parse(json.opt("receiverOrientation"))
                 else ReceiverOrientation.AUTO
             val video = json.obj("video")
@@ -42,12 +42,10 @@ data class Request(val videoCodec: String, val audioCodec: String?, val fps: Int
             protocolRequire(audio.integer("bitrate") > 0, "Invalid audio bitrate")
             audio.string("source", 80)
             audio.string("codecOptions", 8192)
-            if (mediaTransport is SrtTransport) protocolRequire(codec in listOf("h264", "h265", "av1") &&
-                (!enabled || audioCodec in listOf("opus", "aac")), "SRT supports H264/H265/AV1 with Opus/AAC-LC or audio off; PCM excluded (no substitution)", "UNSUPPORTED_CONFIG")
             return Request(codec, if (enabled) audioCodec else null, fps,
                 "Requested $codec ${video.integer("bitrate")} bps, max ${video.integer("maxSize")} px, $fps fps; " +
                     (if (enabled) "audio $audioCodec ${audio.integer("bitrate")} bps" else "audio disabled"),
-                receiverOrientation, mediaTransport)
+                receiverOrientation)
         }
     }
 }

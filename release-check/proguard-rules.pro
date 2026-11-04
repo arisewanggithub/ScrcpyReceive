@@ -1,9 +1,5 @@
 -repackageclasses dev.scrcpy.releasecheck.internal
 -keep class dev.scrcpy.releasecheck.ReleaseCheckRunner { public <init>(); }
--keep class dev.scrcpy.releasecheck.NativeSrtCheck {
-    public <init>();
-    @org.junit.Test public void *(...);
-}
 -keep class dev.scrcpy.releasecheck.NativeOpusCheck {
     public <init>();
     @org.junit.Test public void *(...);

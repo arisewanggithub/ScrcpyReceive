@@ -18,7 +18,6 @@ import org.screencopy.receiver.media.VideoPlayer
 import org.screencopy.receiver.media.VideoPlaybackException
 import org.screencopy.receiver.media.VideoDiagnostic
 import org.screencopy.receiver.media.VideoFormat
-import org.screencopy.receiver.media.SrtPlayback
 import org.screencopy.receiver.protocol.*
 import org.screencopy.receiver.ui.ReceiverScreenEvent
 import org.screencopy.receiver.ui.FailureDiagnostic
@@ -55,10 +54,6 @@ class ReceiverServer private constructor(
     private val videoFactory: ((VideoFormat, PlaybackClock, (String, String) -> Unit, Long) -> VideoPlayer)?,
     private val audioFactory: ((AudioFormat, PlaybackClock, (String, String) -> Unit) -> AudioPlayer)? = null,
     private val clockFactory: () -> PlaybackClock = ::PlaybackClock,
-    private val srtOutput: ResourceSlot<SrtPlayback> = ResourceSlot(),
-    private val srtFactory: ((Request) -> SrtPlayback)? = null,
-    private val validateSrt: () -> Unit = {},
-    private val validateSrtCodecs: (Request) -> Unit = {},
     private val onDiscoveryDiagnostic: (String) -> Unit = {}
 ) : AutoCloseable {
     constructor(
@@ -70,16 +65,9 @@ class ReceiverServer private constructor(
         onPresentationStart: (ReceiverOrientation) -> AutoCloseable = {
             if (it != ReceiverOrientation.AUTO) throw ReceiverOrientationException()
             AutoCloseable {}
-        },
-        srtOutput: ResourceSlot<SrtPlayback> = ResourceSlot(),
-        srtFactory: ((Request) -> SrtPlayback)? = null,
-        validateSrt: () -> Unit = {
-            protocolRequire(org.screencopy.receiver.BuildConfig.SRT_TRIAL, "SRT transport unavailable", "UNSUPPORTED_CONFIG")
         }
     ) : this(name, surface, onStatus, onVideoSize, onListener, port, videoOutput, ::validateCapabilities, onScreenEvent,
         { android.util.Log.e("ScreenCopyReceiver", it.logMessage()) }, onPresentationStart, null,
-        srtOutput = srtOutput, srtFactory = srtFactory, validateSrt = validateSrt,
-        validateSrtCodecs = ::validateCapabilities,
         onDiscoveryDiagnostic = { android.util.Log.i("ScreenCopyReceiver", it) })
 
     private val name = name.take(80)
@@ -215,7 +203,6 @@ class ReceiverServer private constructor(
     override fun close() {
         running.set(false)
         onDiscoveryDiagnostic("event=RECEIVER_LISTENER_STOPPED")
-        active.get()?.noteClose(org.screencopy.receiver.media.SrtCloseOwner.SURFACE_RETIRED)
         timer.shutdownNow()
         val errors = mutableListOf<Exception>()
         fun cleanup(action: () -> Unit) {
@@ -250,9 +237,6 @@ class ReceiverServer private constructor(
         private val connectionError = AtomicReference<Pair<String, String>?>()
         private val playbackLock = Any()
         private val clock by lazy(clockFactory)
-        @Volatile private var srt: SrtPlayback? = null
-        private var srtWidth = 0
-        private var srtHeight = 0
         private var video: VideoPlayer? = null
         private var audio: AudioPlayer? = null
         private var presentation: AutoCloseable? = null
@@ -272,10 +256,8 @@ class ReceiverServer private constructor(
             try {
                 socket.tcpNoDelay = true
                 socket.soTimeout = 10_000
-                writer = ControlWriter(socket, { lastWrite = now(); srt?.controlProgress(false) }, { detail ->
+                writer = ControlWriter(socket, { lastWrite = now() }, { detail ->
                     connectionError.compareAndSet(null, "INTERNAL" to detail)
-                    srt?.controlFailure(IOException("SRT control write failed"))
-                    noteClose(org.screencopy.receiver.media.SrtCloseOwner.ERROR)
                     socket.close()
                 })
                 val hello = read()
@@ -301,33 +283,17 @@ class ReceiverServer private constructor(
                 onScreenEvent(ReceiverScreenEvent.Connecting)
                 request = Request.parse(negotiation.json())
                 val settings = checkNotNull(request)
-                settings.mediaTransport?.validatePeer(checkNotNull(socket.inetAddress.hostAddress))
-                (settings.mediaTransport as? SrtTransport)?.validateSession(session)
-                if (settings.mediaTransport == null) validateRequest(settings)
-                else { validateSrt(); validateSrtCodecs(settings) }
+                validateRequest(settings)
                 requestSummary = settings.summary
-                if (settings.mediaTransport == null) {
-                    tracks = TrackState(settings.tracks)
-                    clock.audioExpected = settings.audioCodec != null
-                }
+                tracks = TrackState(settings.tracks)
+                clock.audioExpected = settings.audioCodec != null
                 phase = "Initializing tracks"
                 phaseAt = now()
                 onStatus(phase, "$senderName\n$requestSummary")
                 val accepted = JSONObject().put("tracks", JSONArray(settings.tracks))
-                if (settings.mediaTransport != null) accepted.put("mediaTransport", JSONObject().put("kind", settings.mediaTransport.kind))
                 send(Type.SESSION_ACCEPT, accepted)
-                if (settings.mediaTransport != null) synchronized(playbackLock) {
-                    srt = srtOutput.replace {
-                        (srtFactory?.invoke(settings)
-                            ?: throw ProtocolException("UNSUPPORTED_CONFIG", "SRT player factory unavailable")).also { player ->
-                            try { player.start() } catch (e: Throwable) { player.close(); throw e }
-                        }
-                    }
-                }
                 while (running.get() && !socket.isClosed) {
                     val message = read()
-                    srt?.controlProgress(true)
-                    srt?.sessionPhase(phase)
                     protocolRequire(message.session == session, "Session ID changed")
                     if (message.type == Type.SESSION_END) {
                         protocolRequire(stopping.get(), "Unexpected SESSION_END")
@@ -337,11 +303,9 @@ class ReceiverServer private constructor(
                     if (stopping.get()) continue
                     when (message.type) {
                         Type.STREAM_CONFIG -> {
-                            protocolRequire(settings.mediaTransport == null, "Custom track config forbidden in external media session")
                             configure(message)
                         }
                         Type.VIDEO_FRAME, Type.AUDIO_PACKET -> synchronized(playbackLock) {
-                            protocolRequire(settings.mediaTransport == null, "Custom media forbidden in external media session")
                             checkNotNull(tracks).media(message)
                             val packet = AccessUnit(message.ptsUs, message.payload, message.flags == 1)
                             if (message.type == Type.VIDEO_FRAME) {
@@ -370,7 +334,7 @@ class ReceiverServer private constructor(
                         }
                         Type.STOP -> {
                             val reason = message.json().string("reason", 1024)
-                            stopPlayback(org.screencopy.receiver.media.SrtCloseOwner.REMOTE_STOP)
+                            stopPlayback()
                             send(Type.SESSION_END, JSONObject().put("reason", reason))
                             return
                         }
@@ -378,7 +342,6 @@ class ReceiverServer private constructor(
                     }
                 }
             } catch (e: Exception) {
-                srt?.controlFailure(e)
                 terminalError = true
                 if (running.get() && !stopping.get() && playbackError.get() == null) {
                     val externalError = connectionError.get()
@@ -532,7 +495,6 @@ class ReceiverServer private constructor(
         fun requestStop(reason: String) {
             stopAt = now()
             if (!stopping.compareAndSet(false, true)) return
-            noteClose(org.screencopy.receiver.media.SrtCloseOwner.USER_STOP)
             try {
                 send(Type.STOP, JSONObject().put("reason", reason))
             } catch (e: Exception) {
@@ -540,7 +502,7 @@ class ReceiverServer private constructor(
                 socket.close()
             } finally {
                 try {
-                    stopPlayback(org.screencopy.receiver.media.SrtCloseOwner.USER_STOP)
+                    stopPlayback()
                 } catch (e: Exception) {
                     onStatus("Playback cleanup failed", "${e.message ?: e.javaClass.simpleName}; reopen receiver")
                     socket.close()
@@ -548,13 +510,11 @@ class ReceiverServer private constructor(
             }
         }
 
-        private fun stopPlayback(owner: org.screencopy.receiver.media.SrtCloseOwner = org.screencopy.receiver.media.SrtCloseOwner.ERROR) = synchronized(playbackLock) {
+        private fun stopPlayback() = synchronized(playbackLock) {
             tracksReady = false
             val oldVideo = video
             val oldAudio = audio
             val oldPresentation = presentation
-            val oldSrt = srt
-            srt = null
             video = null
             audio = null
             presentation = null
@@ -563,93 +523,29 @@ class ReceiverServer private constructor(
             } finally {
                 try { oldVideo?.let { videoOutput.release(it) } } finally {
                     try { oldAudio?.close() } finally {
-                        try { oldSrt?.let {
-                            try { it.closeInitiated(owner) } finally { srtOutput.release(it) }
-                        } } finally { oldPresentation?.close() }
+                        oldPresentation?.close()
                     }
                 }
             }
         }
 
         fun tick() {
-            val player = srt
-            player?.sessionPhase(phase)
-            if (player != null && !stopping.get() && !srtOutput.isClosed && active.get() === this) {
-                try {
-                    val result = player.poll()
-                    if (result.startsWith("ERROR:")) {
-                        srtFailed(result.removePrefix("ERROR:"))
-                    } else if (result.isNotEmpty() &&
-                        JSONObject(result).let { details ->
-                            details.getBoolean("firstFrame") &&
-                                (request?.audioCodec == null || details.getBoolean("audioProof"))
-                        }) {
-                        val details = JSONObject(result)
-                        protocolRequire(details.getInt("width") > 0 && details.getInt("height") > 0 &&
-                            details.getString("decoder").isNotEmpty(), "Invalid library playback diagnostics")
-                        val lease = if (phase != "Playing") onPresentationStart(checkNotNull(request).receiverOrientation) else null
-                        synchronized(playbackLock) {
-                            if (srt !== player || stopping.get() || srtOutput.isClosed ||
-                                !running.get() || active.get() !== this) lease?.close()
-                            else {
-                                val width = details.getInt("width")
-                                val height = details.getInt("height")
-                                if (width != srtWidth || height != srtHeight) {
-                                    srtWidth = width
-                                    srtHeight = height
-                                    onVideoSize(width, height)
-                                }
-
-                                if (lease != null) {
-                                    presentation = lease
-                                    tracksReady = true
-                                    phase = "Playing"
-                                    onStatus("Playing: $senderName", details.getString("decoder"))
-                                    send(Type.STATUS, JSONObject().put("state", "srt-playing")
-                                        .put("message", "Media3 first video frame and enabled audio advancing"))
-                                    onScreenEvent(ReceiverScreenEvent.FramePresented)
-                                }
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    player.controlFailure(e)
-                    srtFailed(e.message ?: "SRT playback failed", e is ReceiverOrientationException)
-                }
-            }
             val time = now()
             when {
                 stopping.get() && time - stopAt >= 2000 -> socket.close()
                 time - lastRead >= 10_000 || phase != "Playing" && !stopping.get() && time - phaseAt >= 10_000 -> {
                     connectionError.compareAndSet(null, "TIMEOUT" to "No progress from sender within 10 seconds")
-                    player?.controlFailure(IOException("SRT control timeout"))
-                    noteClose(org.screencopy.receiver.media.SrtCloseOwner.ERROR)
                     if (active.get() === this) onStatus("Session timed out", "No progress from sender within 10 seconds. Check its network and retry.")
                     socket.close()
                 }
                 writer?.stalled(time) == true -> {
                     connectionError.compareAndSet(null, "TIMEOUT" to "Control write blocked for 10 seconds")
-                    player?.controlFailure(IOException("SRT control write failed"))
-                    noteClose(org.screencopy.receiver.media.SrtCloseOwner.ERROR)
                     if (active.get() === this) onStatus("Connection stalled", "Control write blocked for 10 seconds; reconnect")
                     socket.close()
                 }
                 writer != null && phase != "Setup" && time - lastWrite >= 2000 -> {
                     send(Type.PING, JSONObject().put("nonce", (time % Int.MAX_VALUE).toInt()))
                 }
-            }
-        }
-
-        fun noteClose(owner: org.screencopy.receiver.media.SrtCloseOwner) {
-            srt?.closeInitiated(owner)
-        }
-
-        private fun srtFailed(detail: String, presentationError: Boolean = false) {
-            playbackFailed(if (presentationError) "UNSUPPORTED_CONFIG" else "DECODER_FAILED", detail,
-                if (presentationError) FailureOrigin.PRESENTATION else FailureOrigin.VIDEO)
-            // A playback error must retire the Surface independently of a blocked control read.
-            try { stopPlayback() } finally {
-                try { writer?.close() } finally { socket.close() }
             }
         }
 
@@ -671,23 +567,15 @@ class ReceiverServer private constructor(
             videoFactory: ((VideoFormat, PlaybackClock, (String, String) -> Unit, Long) -> VideoPlayer)? = null,
             audioFactory: ((AudioFormat, PlaybackClock, (String, String) -> Unit) -> AudioPlayer)? = null,
             clockFactory: () -> PlaybackClock = ::PlaybackClock,
-            srtFactory: ((Request) -> SrtPlayback)? = null,
-            srtOutput: ResourceSlot<SrtPlayback> = ResourceSlot(),
-            onVideoSize: (Int, Int) -> Unit = { _, _ -> },
-            validateSrtCodecs: (Request) -> Unit = {}) =
+            onVideoSize: (Int, Int) -> Unit = { _, _ -> }) =
             ReceiverServer(name, null, onStatus, onVideoSize, onListener, port, ResourceSlot(), validateRequest, onScreenEvent,
-                onFailure, onPresentationStart, videoFactory, audioFactory, clockFactory, srtOutput,
-                srtFactory = srtFactory, validateSrtCodecs = validateSrtCodecs)
+                onFailure, onPresentationStart, videoFactory, audioFactory, clockFactory)
 
         private fun validateCapabilities(settings: Request) {
             val types = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { !it.isEncoder }.flatMap { it.supportedTypes.toList() }
             protocolRequire(types.any { it.equals(Configuration.mime(settings.videoCodec), true) }, "No decoder for selected video codec", "UNSUPPORTED_CONFIG")
             if (settings.audioCodec == "aac") protocolRequire(types.any { it.equals("audio/mp4a-latm", true) }, "No AAC decoder", "UNSUPPORTED_CONFIG")
             if (settings.audioCodec == "opus") {
-                if (settings.mediaTransport is SrtTransport) {
-                    protocolRequire(types.any { it.equals("audio/opus", true) }, "No platform Opus decoder for Media3 SRT", "UNSUPPORTED_CONFIG")
-                    return
-                }
                 try {
                     org.screencopy.receiver.media.OpusDecoder(2).use { }
                 } catch (_: LinkageError) {

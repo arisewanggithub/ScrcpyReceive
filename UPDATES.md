@@ -101,11 +101,11 @@ checks do not require binary publication approval.
 
 ### PR validation versus publication
 
-The workflow separates jobs by event. PRs alone run the full default/SRT JVM,
-lint, debug, remote UI (15 tests), optimized runtime and sender container suites.
+The workflow separates jobs by event. PRs alone run the TCP receiver JVM,
+lint, debug, remote UI (15 tests) and optimized runtime suites.
 After all checks pass, **Validated PR source proof** records the PR head and
 tested merge tree as a small 90-day Actions artifact. This is a required merge
-check alongside the four existing validation checks.
+check alongside the three existing validation checks.
 
 Ordinary main pushes do not rebuild or rerun the suite. Stable tags and opted-in
 main prereleases first require an exact merged protected-main PR commit, a
@@ -153,15 +153,11 @@ configuration or `requireReleaseSigning=true` conflicts with smoke mode.
 The publisher explicitly uses smoke=false and rebuilds with the user-configured
 permanent signer; smoke APKs, debug keystores and AVD storage are never artifacts.
 
-The standalone cohort has **six tests**: three raw native SRT loopback/exact-byte,
-cancel/close/backpressure/stream-ID/stale-handle cases, two actual Opus JNI
+The standalone cohort has **three tests**: two actual Opus JNI
 decode/error checks and one actual manifest-resource/launcher check. Target
 classes/native libraries are loaded from the actual installed app package through
 its separate classloader, not compiled or packaged into the harness. CI launches
 the real app process separately without starting playback.
-Wrong-stream-ID validation requires the listener's specific control-session
-rejection and no usable listener read/write connection. Caller transport connect
-may finish before that application-level check; its success is not acceptance.
 No capture, installer operation, Shizuku permission grant or physical phone is
 involved. Sender-side BC identity, SPAKE2 and Conscrypt factory/reflection checks
 run in the sender's separate job, not this receiver cohort. Established-socket

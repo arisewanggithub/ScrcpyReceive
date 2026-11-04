@@ -2,7 +2,6 @@ plugins {
     id("com.android.application")
 }
 
-val srtTrial = providers.gradleProperty("srtTrial").map { it.toBooleanStrict() }.getOrElse(true)
 val releaseSmokeTest = providers.gradleProperty("releaseSmokeTest").map { it.toBooleanStrict() }.getOrElse(false)
 val requireReleaseSigning = providers.gradleProperty("requireReleaseSigning").map { it.toBooleanStrict() }.getOrElse(false)
 val productionSigningConfigured = providers.gradleProperty("releaseSigningKeystorePath").isPresent ||
@@ -12,7 +11,6 @@ val productionSigningConfigured = providers.gradleProperty("releaseSigningKeysto
 require(!releaseSmokeTest || (!requireReleaseSigning && !productionSigningConfigured)) {
     "Release smoke signing is test-only and cannot coexist with publication or production signing configuration"
 }
-require(!releaseSmokeTest || srtTrial) { "Release smoke requires srtTrial=true; skipped native tests are forbidden" }
 val releaseVersionCode = providers.gradleProperty("releaseVersionCode").getOrElse("1").toInt()
 require(releaseVersionCode > 0) { "releaseVersionCode must be a positive Android version code" }
 val releaseKeystore = providers.gradleProperty("releaseSigningKeystorePath")
@@ -40,10 +38,9 @@ android {
         targetSdk = 36
         versionCode = releaseVersionCode
         versionName = providers.gradleProperty("releaseVersionName").getOrElse("0.1.0")
-        buildConfigField("boolean", "SRT_TRIAL", srtTrial.toString())
         externalNativeBuild {
             cmake {
-                arguments += listOf("-DANDROID_STL=c++_static", "-DSRT_TRIAL=$srtTrial")
+                arguments += listOf("-DANDROID_STL=c++_static")
             }
         }
         ndk {
@@ -93,10 +90,6 @@ android {
 }
 
 dependencies {
-    // Sources compile in SDK-free/custom APKs too; SRT native loading remains explicitly gated.
-    implementation("androidx.media3:media3-exoplayer:1.11.1")
-    implementation("androidx.media3:media3-datasource:1.11.1")
-    implementation("androidx.media3:media3-extractor:1.11.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
     testImplementation("org.robolectric:robolectric:4.16.1")

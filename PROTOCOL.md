@@ -68,130 +68,13 @@ Incorrect version fields fail VERSION immediately. TLS ClientHello fails magic i
 Do not wait for a complete40-byte header to reject invalid magic/version. Setup and
 individual startup phases10s overall (trickled reads do not extend); writer10s.
 
-## SRT fragmented MP4 media transport
+## Media transport
 
-SRT is explicitly selected alongside the default custom TCP compatibility path.
-Install matching SRT-enabled sender and receiver APKs.
-An incompatible peer MUST NOT cause silent fallback or capture.
-The request contains exactly:
-
-```json
-{"mediaTransport":{"kind":"srt","container":"fmp4","url":"srt://192.168.1.25:43517","latencyMs":100,"streamId":"sc-0000000000000001"}}
-```
-
-The descriptor has exactly these five fields. `kind` is `srt`, `container` is
-`fmp4`, and `latencyMs` is an integer20..2000 (sender uses100).
-`streamId` is `sc-` followed by the positive control-header session ID as exactly
-16 lowercase hexadecimal digits, zero-padded. The example uses session1.
-The URL is plain SRT with an explicit ephemeral port1..65535, numeric IP only,
-no DNS, userinfo, path (including `/`), query or fragment. IPv6 uses brackets.
-Its host MUST match the actual sender TCP control-socket peer IP; the sender
-advertises its actual control-socket local IP, never a saved/discovered host.
-The sender creates its interface-bound SRT listener after control connection and
-before SESSION_REQUEST; it accepts only the control peer IP and matching stream
-ID. This is session routing on a trusted LAN, NOT authentication.
-
-The receiver validates the descriptor, session and requested codecs before
-`SESSION_ACCEPT {"tracks":[1,2],"mediaTransport":{"kind":"srt"}}`
-(`[1]` audio off). The sender requires that explicit echo before capture.
-Malformed, unsupported, unavailable or mismatched SRT requests are rejected with
-UNSUPPORTED_CONFIG, never reinterpreted as custom TCP. A present descriptor
-with any unsupported kind is likewise rejected.
-The absent `mediaTransport` field alone selects custom TCP.
-The receiver then connects as SRT caller. Capture still starts ONLY after
-the user's Play and SESSION_ACCEPT; no automatic retry or new capture.
-
-SRT transports an ordered byte stream of standard fragmented MP4: one init
-segment, followed by `moof`/`mdat` fragments with per-track `tfdt` decode times.
-No custom STREAM_CONFIG, STREAM_READY, VIDEO_FRAME or AUDIO_PACKET messages
-are allowed on this session's control connection. The sender flushes fragments
-at100ms independently of future video keyframes, including a static first frame
-with continuing audio. AVC uses the standard `avc3` sample entry: H.264
-configuration/dimension changes (including sender rotation) retain the session
-and send the actual new SPS/PPS in-band before the next real IDR access unit.
-Identical encoder-restart configurations use the same rule. The initial `avcC`
-is written once; there are no repeated init segments, invented keyframe flags,
-discarded frames or orientation locks. A configuration not followed by a real
-IDR fails explicitly. Changed audio configuration or a different video codec
-still requires a new session. Supported SRT selections are H.264, H.265 or AV1
-with Opus or AAC-LC or audio off; no codec/FPS/bitrate substitution.
-Real H.265 capture/Stop safety is unverified; do not automate it as acceptance.
-
-HEVC uses standard `hev1`/`hvcC`, serialized by the official Media3 muxer from
-actual complete VPS/SPS/PPS. Parameter arrays permit later in-band updates.
-Configuration/dimension changes (including rotation) prepend the complete actual
-VPS/SPS/PPS before the next authentic IRAP picture, retaining one init segment.
-The official extractor converts length-prefixed HEVC NALs to Annex B; the bounded
-bridge uses official HEVC SPS/profile metadata to announce actual CSD/dimensions
-before the unchanged access unit. Missing/inconsistent parameters or non-IRAP
-activation fail explicitly. Raw PTS, key flags, FIFO, audio and the SRT connection
-remain intact; no repeated moov, invented CSD/keys, clock reset or capture Stop.
-Both applications must support this configuration handling. Hardware rotation/
-decoder adaptation requires validation. Real H.265 display-capture/
-Stop/recast safety remains unverified because kernel-panic risk has been reported.
-
-AAC uses standard `mp4a`/`esds` from actual stereo 48 kHz AAC-LC
-AudioSpecificConfig, and raw access units (never ADTS). ASC frameLengthFlag
-selects 1024 or 960 samples per access unit. Unsupported profiles/extensions,
-core/channel formats and configuration changes fail explicitly.
-AV1 uses standard `av01`/`av1C`, with the official Media3 muxer deriving the
-record from actual sequence/config OBUs in the first access unit; if absent,
-the sender prepends its actual encoder configuration OBUs, never fake CSD.
-Actual sequence dimensions must match the scrcpy metadata. AV1 CSD/sequence/
-dimension changes are explicitly unsupported; this is not AVC rotation.
-Encoder inventory and exact geometry/FPS/bitrate preflight must succeed;
-receiver platform decoder availability is checked before SESSION_ACCEPT.
-Unavailable codec returns UNSUPPORTED_CONFIG before capture, never a substitution.
-HEVC/AAC/AV1 standard-container support does not establish device-specific hardware
-playback. Validate decoder and audio readiness on the target hardware.
-
-One shared timestamp origin preserves initial A/V source offsets. Video keeps
-source presentation timestamps. Opus FIFO/payloads, pre-skip and gain are
-retained; mux presentation timestamps are anchored once to the first audio
-source PTS and advanced by each actual Opus packet duration, so legitimate
-source audio PTS reversals do not reorder, drop or clamp packets. The muxer
-does not implement a receiver playback clock, decoder or resampler.
-AAC uses a rational sample-count timeline anchored once to the first source
-observation with the same FIFO/payload/common-origin guarantees, without
-accumulating rounded per-packet microsecond durations.
-
-Receiver Media3 owns fMP4 demux, platform codecs and physical playback.
-Android's shared decoded-audio regulator targets 50 ms independently of the
-small requested device buffer; source presentation excludes inserted silence.
-Decoded video is scheduled immediately rather than gated by the audio master.
-The Media3 global scheduling/loading cursor is independent of the source-only
-audio presentation counter; inserted silence does not count as source output
-or readiness, and source gaps must not stop loading the packets needed to recover.
-Its official fragmented MP4 extractor recognizes `avc3` and preserves in-band
-NAL units. A bounded AVC TrackOutput bridge uses Media3's SPS parser to announce
-the actual new CSD, profile and dimensions before committing that same unmodified
-IDR sample. Default Media3 renderers handle codec adaptation/reinitialization;
-AV1 OBUs bypass all AVC NAL parsing, retaining payload/encoder key flags.
-Extracted track MIME must match the accepted selection; AAC ASC must match
-its sample entry rate/channel metadata. Audio-off forbids an audio track.
-No decoder backend, encoded timestamp or user capture setting is replaced.
-Actual decoder video-size callbacks update receiver Surface aspect/diagnostics.
-Both applications must support this configuration handling; a wire protocol
-version match alone does not establish decoder rotation support.
-No first-party AudioPlayer/VideoPlayer/PlaybackClock is used for this path.
-Only after a real rendered first video frame AND position advancement of enabled
-audio does the receiver send
-`STATUS {"state":"srt-playing","message":"Media3 first video frame and enabled audio advancing"}`.
-Audio-off requires the rendered frame only. Merely connecting SRT, parsing the
-init segment, configuring codecs or entering a player-ready state is NOT proof
-of playback. Existing10s startup deadline, PING/PONG, STOP/SESSION_END/ERROR/BUSY,
-single-active ownership and cancellation remain in force. Close native input
-before joining workers or releasing Media3 so blocked reads/writes are cancelled.
-Errors are explicit and cannot silently reopen the source.
-
-The SRT APK contains pinned libsrt1.5.7.
-SRT encryption is compiled OFF for this trusted-LAN transport; stream ID
-and peer pinning do not provide confidentiality or authentication. Live/message
-transport uses payloads<=1316 bytes and disables late-packet dropping because
-discarding container bytes corrupts the stream. A stalled sender fails explicitly
-after one second without write progress. Native close must unblock accept,
-connect, read and backpressured write without detached workers.
-`protocol/fixtures/srt-fmp4.json` is the canonical paired SRT fixture.
+This Android receiver supports custom TCP only. Omit `mediaTransport` from
+SESSION_REQUEST. Any present external transport descriptor is rejected with
+UNSUPPORTED_CONFIG before session acceptance; it never triggers fallback or
+capture. Discovery/HELLO do not negotiate transports, so sender-side selection
+must be configured separately.
 
 ## TCP binary framing (all control paths)
 
@@ -367,8 +250,8 @@ dropped to conceal PTS reversals or evade admission limits. Underruns insert
 output silence without source-audio advancement or immediate delayed-audio
 discard. Once-per-second, four-second-horizon compensation is bounded to +/-2%.
 `AUDIO_REGULATION` distinguishes source frames, silence, dropped output and
-recoveries. TCP device failures still report AUDIO_FAILED; SRT retains explicit
-Media3 player errors rather than silently replacing a failed output. STOP
+recoveries. Device failures still report AUDIO_FAILED rather than silently
+replacing a failed output. STOP
 and reconfiguration clear FIFO, output mapping and readiness proof.
 
 ## Fixtures

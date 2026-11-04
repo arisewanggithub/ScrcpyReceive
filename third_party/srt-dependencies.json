@@ -1,9 +1,0 @@
-{
-  "srt": {
-    "version": "1.5.7",
-    "url": "https://codeload.github.com/Haivision/srt/tar.gz/refs/tags/v1.5.7",
-    "archive": "srt-1.5.7.tar.gz",
-    "checksum": "srt-1.5.7.sha256",
-    "license": "MPL-2.0"
-  }
-}

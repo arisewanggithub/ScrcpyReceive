@@ -2,7 +2,7 @@ param(
     [switch]$SelfTest,
     [string]$App,
     [string]$TestApk,
-    [ValidateSet('dev.screencopy.sender', 'org.screencopy.receiver')][string]$ApplicationId
+    [ValidateSet('org.screencopy.receiver')][string]$ApplicationId
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression
@@ -61,6 +61,15 @@ function Get-ApkClasses([string]$path) {
     return ,$classes
 }
 
+function Assert-AppNativeLibraries($entries) {
+    $expected = @('lib/arm64-v8a/libscreencopy_opus.so', 'lib/armeabi-v7a/libscreencopy_opus.so',
+        'lib/x86_64/libscreencopy_opus.so')
+    $actual = @($entries | Where-Object { $_ -cmatch '^lib/.+\.so$' } | Sort-Object)
+    if (@(Compare-Object -CaseSensitive ($expected | Sort-Object) $actual).Count -ne 0) {
+        throw 'Receiver APK must contain only the pinned Opus library for its three supported ABIs'
+    }
+}
+
 function Assert-Separation($appClasses, $testClasses, [string]$id) {
     foreach ($descriptor in $testClasses) {
         if ($descriptor -cin $appClasses) { throw "App implementation duplicated in test APK: $descriptor" }
@@ -69,9 +78,7 @@ function Assert-Separation($appClasses, $testClasses, [string]$id) {
             throw "App wrapper or unsafe test packaged into test APK: $descriptor"
         }
     }
-    $roots = if ($id -eq 'dev.screencopy.sender') {
-        @('Ldev/screencopy/sender/SrtNative;', 'Ldev/screencopy/sender/ShellCaptureService;')
-    } else { @('Lorg/screencopy/receiver/media/SrtNative;', 'Lorg/screencopy/receiver/media/OpusDecoder;') }
+    $roots = @('Lorg/screencopy/receiver/media/OpusDecoder;')
     foreach ($type in $roots) {
         if ($type -cnotin $appClasses -or $type -cin $testClasses) { throw 'JNI/reflection roots must exist exclusively in optimized app DEX' }
     }
@@ -79,9 +86,17 @@ function Assert-Separation($appClasses, $testClasses, [string]$id) {
 }
 
 if ($SelfTest) {
-    $roots = @('Lorg/screencopy/receiver/media/SrtNative;', 'Lorg/screencopy/receiver/media/OpusDecoder;')
+    $nativeEntries = @('lib/arm64-v8a/libscreencopy_opus.so', 'lib/armeabi-v7a/libscreencopy_opus.so',
+        'lib/x86_64/libscreencopy_opus.so')
+    Assert-AppNativeLibraries $nativeEntries
+    foreach ($invalid in @(@($nativeEntries + 'lib/x86_64/libother.so'), @($nativeEntries | Select-Object -First 2))) {
+        $rejected = $false
+        try { Assert-AppNativeLibraries $invalid } catch { $rejected = $true }
+        if (!$rejected) { throw 'Unexpected or missing app native library was accepted' }
+    }
+    $roots = @('Lorg/screencopy/receiver/media/OpusDecoder;')
     Assert-Separation $roots @('Ltest/Test;') 'org.screencopy.receiver'
-    Assert-Separation $roots @('Ldev/scrcpy/releasecheck/NativeSrtCheck;') 'org.screencopy.receiver'
+    Assert-Separation $roots @('Ldev/scrcpy/releasecheck/NativeOpusCheck;') 'org.screencopy.receiver'
     foreach ($badTest in @('Lorg/conscrypt/Conscrypt;', 'Ldev/screencopy/sender/LocalAdb;',
         'Ldev/screencopy/sender/CodecConfig;', 'Ldev/screencopy/sender/MainActivity;',
         'Ldev/screencopy/sender/Secrets;', 'Ldev/screencopy/sender/Wire;',
@@ -113,6 +128,9 @@ if ($SelfTest) {
     try {
         if ($harness.Entries | Where-Object { $_.FullName -cmatch '^lib/.+\.so$' }) { throw 'Harness must load app JNI libraries, never package native copies' }
     } finally { $harness.Dispose() }
+    $application = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $App))
+    try { Assert-AppNativeLibraries @($application.Entries | ForEach-Object FullName) }
+    finally { $application.Dispose() }
     Assert-Separation (Get-ApkClasses $App) (Get-ApkClasses $TestApk) $ApplicationId
     Write-Output 'PASS optimized app/test DEX separation and JNI/reflection roots'
 }
