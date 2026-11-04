@@ -28,6 +28,181 @@ class SrtReceivePipelineTest {
         .put("kind", "srt").put("container", "fmp4").put("url", url)
         .put("latencyMs", 100).put("streamId", streamId))
 
+    @Test fun nonzeroInitialPtsStartsRealAudioWithoutWaitingForTheStoppedLoadingClock() {
+        val fixture = arguments.getString("srtOffsetFixtureUri")
+        val url = arguments.getString("srtOffsetTestUrl") ?: if (fixture != null) "srt://127.0.0.1:43517"
+            else error("Explicit H264/Opus fixture or SRT source with nonzero initial timestamps required")
+        HeadlessSurface().use { output ->
+            val player = SrtPlayer(instrumentation.targetContext, output.surface,
+                Request("h264", "opus", 30, "Nonzero startup timestamps",
+                    mediaTransport = transport(url, "sc-0000000000000001")), fixture)
+            try {
+                val start = SystemClock.elapsedRealtime()
+                player.start()
+                var previous = awaitProof(player::poll)
+                assertTrue("Source preroll waited for a scheduling clock that cannot start yet",
+                    SystemClock.elapsedRealtime() - start < 3000)
+                var details = ""
+                instrumentation.runOnMainSync { details = player.diagnosticsForTests() }
+                assertEquals("Fixture did not preserve the nonzero source timestamps",
+                    1_250_000L, JSONObject(details).getLong("sourceOriginUs"))
+                if (fixture == null) assertTrue(JSONObject(details).getLong("inputBytes") > 0)
+                repeat(3) {
+                    val baseline = previous
+                    Thread.sleep(1000)
+                    previous = awaitProof(player::poll) {
+                        it.getLong("audioRenderedBuffers") > baseline.getLong("audioRenderedBuffers") &&
+                            it.getLong("renderedFrames") > baseline.getLong("renderedFrames") + 10
+                    }
+                    output.checkHealthy()
+                }
+            } finally { logPlayerState(player); player.close(); awaitRelease(player) }
+        }
+    }
+
+    @Test fun liveSrtSteadyAudioDoesNotLoseSamplesToDecoderReadAhead() {
+        val url = arguments.getString("srtTestUrl") ?: error("Explicit continuous-tone SRT source required")
+        val id = arguments.getString("srtTestStreamId") ?: error("Explicit continuity stream id required")
+        HeadlessSurface().use { output ->
+            val player = SrtPlayer(instrumentation.targetContext, output.surface,
+                Request("h264", "opus", 30, "Continuous tone fixture", mediaTransport = transport(url, id)),
+                arguments.getString("srtToneFixtureUri"))
+            fun diagnostic(): JSONObject {
+                var result = ""
+                instrumentation.runOnMainSync { result = player.diagnosticsForTests() }
+                return JSONObject(result)
+            }
+            try {
+                player.start()
+                var previous = awaitProof(player::poll)
+                Thread.sleep(5000)
+                val initial = diagnostic()
+                val initialAudio = initial.getJSONObject("audioRegulation")
+                val start = SystemClock.elapsedRealtime()
+                repeat(15) {
+                    val baseline = previous
+                    Thread.sleep(2000)
+                    previous = awaitProof(player::poll) {
+                        it.getLong("renderedFrames") > baseline.getLong("renderedFrames") + 15 &&
+                            it.getLong("positionMs") > baseline.getLong("positionMs") + 1000
+                    }
+                    val current = diagnostic()
+                    val audio = current.getJSONObject("audioRegulation")
+                    assertEquals("Steady audio was shed as decoded backlog: $current",
+                        initialAudio.getLong("droppedFrames"), audio.getLong("droppedFrames"))
+                    assertEquals("Continuous source needed inserted silence: $current",
+                        initialAudio.getLong("silenceFrames"), audio.getLong("silenceFrames"))
+                    assertTrue(audio.getDouble("speed") in 0.98..1.02)
+                    output.checkHealthy()
+                    android.util.Log.i("ScreenCopySrtTest", "audio-continuity=$current")
+                }
+                val elapsedUs = (SystemClock.elapsedRealtime() - start) * 1000
+                val advancedUs = diagnostic().getLong("audioSourcePositionUs") -
+                    initial.getLong("audioSourcePositionUs")
+                assertTrue("Source audio fell behind while scheduling continued: source=$advancedUs elapsed=$elapsedUs",
+                    advancedUs > elapsedUs * 97 / 100)
+            } finally { logPlayerState(player); player.close(); awaitRelease(player) }
+        }
+    }
+
+    @Test fun liveSrtRemainsProgressingBeyondStuckTimeoutWithRecurrentSourceGaps() {
+        val url = arguments.getString("srtTestUrl") ?: error("Explicit bounded recovery SRT source required")
+        val id = arguments.getString("srtTestStreamId") ?: error("Explicit recovery stream id required")
+        val video = arguments.getString("srtFixtureVideoCodec") ?: "h264"
+        HeadlessSurface().use { output ->
+            val player = SrtPlayer(instrumentation.targetContext, output.surface,
+                Request(video, "opus", 30, "Sustained source-gap fixture", mediaTransport = transport(url, id)))
+            try {
+                player.start()
+                var previous = awaitProof(player::poll)
+                val initial = previous
+                var previousSourceUs = 0L
+                instrumentation.runOnMainSync {
+                    previousSourceUs = JSONObject(player.diagnosticsForTests()).getLong("audioSourcePositionUs")
+                }
+                repeat(24) { index ->
+                    val baseline = previous
+                    val drained = output.drainedFrames.get()
+                    Thread.sleep(3000)
+                    previous = awaitProof(player::poll) {
+                        it.getLong("positionMs") > baseline.getLong("positionMs") + 1500 &&
+                            it.getLong("renderedFrames") > baseline.getLong("renderedFrames") + 15 &&
+                            output.drainedFrames.get() > drained + 15
+                    }
+                    if (index % 2 == 1) {
+                        var currentSourceUs = 0L
+                        instrumentation.runOnMainSync {
+                            currentSourceUs = JSONObject(player.diagnosticsForTests()).getLong("audioSourcePositionUs")
+                        }
+                        assertTrue("Real source presentation failed to resume across a six-second recovery window",
+                            currentSourceUs > previousSourceUs + 500000)
+                        previousSourceUs = currentSourceUs
+                    }
+                    android.util.Log.i("ScreenCopySrtTest", "sustained-recovery proof=$previous")
+                }
+                assertTrue(previous.getLong("audioRenderedBuffers") > initial.getLong("audioRenderedBuffers") + 100)
+                assertTrue(previous.getLong("positionMs") > initial.getLong("positionMs") + 70000)
+            } finally { logPlayerState(player); player.close(); awaitRelease(player) }
+        }
+    }
+
+    @Test fun sourceAudioGapDoesNotStopVideoLoadingAndAudioResumesWithoutFakeProof() {
+        val fixture = arguments.getString("srtGapFixtureUri")
+            ?: error("Explicit 24-second H264/Opus fixture with source audio absent from 8 to 12 seconds required")
+        HeadlessSurface().use { output ->
+            val player = SrtPlayer(instrumentation.targetContext, output.surface,
+                Request("h264", "opus", 30, "Audio-source gap fixture",
+                    mediaTransport = transport("srt://127.0.0.1:43517", "sc-0000000000000001")), fixture)
+            try {
+                player.start()
+                var previous = awaitProof(player::poll)
+                var duringGapAudioBuffers = 0L
+                repeat(9) { index ->
+                    val baseline = previous
+                    val drained = output.drainedFrames.get()
+                    Thread.sleep(1500)
+                    previous = awaitProof(player::poll) {
+                        it.getLong("positionMs") > baseline.getLong("positionMs") + 500 &&
+                            it.getLong("renderedFrames") > baseline.getLong("renderedFrames") + 10 &&
+                            output.drainedFrames.get() > drained + 10
+                    }
+                    if (index == 5) duringGapAudioBuffers = previous.getLong("audioRenderedBuffers")
+                    android.util.Log.i("ScreenCopySrtTest", "source-gap progression=$previous")
+                }
+                assertTrue("Real source audio did not resume after the gap",
+                    previous.getLong("audioRenderedBuffers") > duringGapAudioBuffers + 10)
+            } finally { logPlayerState(player); player.close(); awaitRelease(player) }
+        }
+    }
+
+    @Test fun localMovingFmp4KeepsVideoAndSourceAudioAdvancingAfterStartup() {
+        val fixture = arguments.getString("srtLocalFixtureUri")
+            ?: error("Explicit moving H264/AAC fMP4 fixture required")
+        require(fixture.startsWith("file:"))
+        HeadlessSurface().use { output ->
+            val player = SrtPlayer(instrumentation.targetContext, output.surface,
+                Request("h264", "aac", 30, "Moving frame-release fixture",
+                    mediaTransport = transport("srt://127.0.0.1:43517", "sc-0000000000000001")), fixture)
+            try {
+                player.start()
+                var previous = awaitProof(player::poll)
+                repeat(3) {
+                    val baseline = previous
+                    val drained = output.drainedFrames.get()
+                    Thread.sleep(1500)
+                    previous = awaitProof(player::poll) {
+                        it.getLong("renderedFrames") > baseline.getLong("renderedFrames") + 10 &&
+                            it.getLong("audioRenderedBuffers") > baseline.getLong("audioRenderedBuffers") &&
+                            it.getLong("positionMs") > baseline.getLong("positionMs") + 500 &&
+                            output.drainedFrames.get() > drained + 10
+                    }
+                    output.checkHealthy()
+                    android.util.Log.i("ScreenCopySrtTest", "moving-fixture before=$baseline after=$previous")
+                }
+            } finally { logPlayerState(player); player.close(); awaitRelease(player) }
+        }
+    }
+
     @Test fun headlessLiveSrtRotationRetainsVideoAudioAndSession() = liveRotation("h264", "opus")
 
     @Test fun headlessLiveSrtHevcRotationRetainsVideoAudioAndSession() {
@@ -175,6 +350,27 @@ class SrtReceivePipelineTest {
         }
     }
 
+    @Test fun videoOnlySparseFuturePicturesDoNotStopTheClockOrLoading() {
+        val fixture = arguments.getString("srtAudioOffGapFixtureUri")
+            ?: error("Explicit video-only H264 fMP4 with at least eight pictures spaced one second apart required")
+        HeadlessSurface().use { output ->
+            val player = SrtPlayer(instrumentation.targetContext, output.surface,
+                Request("h264", null, 1, "Sparse video-only fixture",
+                    mediaTransport = transport("srt://127.0.0.1:43517", "sc-0000000000000001")), fixture)
+            try {
+                player.start()
+                val first = awaitProof(player::poll)
+                val advanced = awaitProof(player::poll) {
+                    it.getLong("positionMs") > first.getLong("positionMs") + 1500 &&
+                        it.getLong("renderedFrames") >= 3 && output.drainedFrames.get() >= 3
+                }
+                assertFalse(advanced.getBoolean("audioProof"))
+                assertEquals(0, advanced.getInt("audioRenderedBuffers"))
+                output.checkHealthy()
+            } finally { logPlayerState(player); player.close(); awaitRelease(player) }
+        }
+    }
+
     @Test fun headlessLiveSrtAudioOffRendersFirstFrameWithoutAudioProof() {
         assumeTrue(BuildConfig.SRT_TRIAL)
         val url = arguments.getString("srtAudioOffTestUrl")
@@ -203,6 +399,8 @@ class SrtReceivePipelineTest {
                 assertTrue("No actual headless Surface output", output.drainedFrames.get() >= 1)
                 Thread.sleep(1500)
                 val idle = awaitProof(player::poll)
+                assertTrue("Video-only idle presentation must keep the scheduling clock moving",
+                    idle.getLong("positionMs") > proof.getLong("positionMs") + 1000)
                 assertEquals("An idle video-only source must not invent another frame", 1, idle.getInt("renderedFrames"))
                 assertFalse(idle.getBoolean("audioProof"))
                 assertEquals(0, idle.getInt("audioRenderedBuffers"))
@@ -465,6 +663,9 @@ class SrtReceivePipelineTest {
         if (singleFrame) {
             assertEquals("Fixture must contain exactly one real video frame", 1, first.getInt("renderedFrames"))
             assertEquals("No duplicate video may hide static-source starvation", 1, next.getInt("renderedFrames"))
+        } else {
+            assertTrue("Audio continued but moving video froze after startup",
+                next.getLong("renderedFrames") > first.getLong("renderedFrames"))
         }
         assertPlayingUi(activity)
         android.util.Log.i("ScreenCopySrtTest", "actual-Activity continuing-audio proof=$next")
@@ -503,7 +704,9 @@ class SrtReceivePipelineTest {
                     "expected bounded fixture ended after playback proof elapsedMs=$elapsedMs terminal=$result")
                 return
             }
-            assertTrue("Playback proof disappeared before bounded fixture ended", result.isNotEmpty())
+            // Terminal renderer callbacks may retire proof before the main-thread error arrives.
+            if (result.isEmpty())
+                assertTrue("Playback proof disappeared before bounded fixture ended", elapsedMs >= minimumMs)
             Thread.sleep(20)
         }
         error("Bounded fixture did not end within ${seconds + 8} seconds after player start")

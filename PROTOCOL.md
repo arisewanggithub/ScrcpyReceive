@@ -155,7 +155,13 @@ AAC uses a rational sample-count timeline anchored once to the first source
 observation with the same FIFO/payload/common-origin guarantees, without
 accumulating rounded per-packet microsecond durations.
 
-Receiver Media3 owns fMP4 demux, platform codecs, A/V timing and playback.
+Receiver Media3 owns fMP4 demux, platform codecs and physical playback.
+Android's shared decoded-audio regulator targets 50 ms independently of the
+small requested device buffer; source presentation excludes inserted silence.
+Decoded video is scheduled immediately rather than gated by the audio master.
+The Media3 global scheduling/loading cursor is independent of the source-only
+audio presentation counter; inserted silence does not count as source output
+or readiness, and source gaps must not stop loading the packets needed to recover.
 Its official fragmented MP4 extractor recognizes `avc3` and preserves in-band
 NAL units. A bounded AVC TrackOutput bridge uses Media3's SPS parser to announce
 the actual new CSD, profile and dimensions before committing that same unmodified
@@ -163,7 +169,7 @@ IDR sample. Default Media3 renderers handle codec adaptation/reinitialization;
 AV1 OBUs bypass all AVC NAL parsing, retaining payload/encoder key flags.
 Extracted track MIME must match the accepted selection; AAC ASC must match
 its sample entry rate/channel metadata. Audio-off forbids an audio track.
-No decoder backend, audio clock, timestamp or user capture setting is replaced.
+No decoder backend, encoded timestamp or user capture setting is replaced.
 Actual decoder video-size callbacks update receiver Surface aspect/diagnostics.
 Both applications must support this configuration handling; a wire protocol
 version match alone does not establish decoder rotation support.
@@ -318,8 +324,10 @@ audio STREAM_CONFIG `codec`; other or missing codec values grant no exception.
 Retain every packet, payload, PTS and arrival/decode order; do not sort, drop,
 clamp, duplicate or create generations to hide source-clock reversals.
 Receiver maps source observations against increasing decoded sample positions
-to monotonic presentation, audio master when enabled; preserve initial A/V
-offsets and apply preSkip once per generation. No B-frame reordering.
+to monotonic source-audio presentation; apply preSkip once per generation.
+Default video is immediate and independent of audio buffering rather than
+audio-master gated. Initial source PTS metadata and FIFO payload order remain
+intact. No B-frame reordering.
 
 Both applications must preserve Opus source order and accept nonnegative PTS
 reversals. A wire protocol version match alone does not establish this behavior.
@@ -350,6 +358,18 @@ additional, OS socket buffers measured separately. Fair round-robin media,
 controls prioritized. Exceeded bounds stop explicitly, no arbitrary dependent
 video dropping or unbounded latency. Sender nonsticky foreground service.
 All streams, threads, guardian and capture resources cleaned on stop/error.
+
+Android decoded audio uses the existing tighter output bounds: 50-ms target,
+60-ms startup FIFO and 115-ms playing FIFO, plus a separately validated device
+output (5 ms requested, platform minimum/rate headroom honored, 130-ms ceiling).
+Excess old decoded output may be discarded; encoded audio/video is never
+dropped to conceal PTS reversals or evade admission limits. Underruns insert
+output silence without source-audio advancement or immediate delayed-audio
+discard. Once-per-second, four-second-horizon compensation is bounded to +/-2%.
+`AUDIO_REGULATION` distinguishes source frames, silence, dropped output and
+recoveries. TCP device failures still report AUDIO_FAILED; SRT retains explicit
+Media3 player errors rather than silently replacing a failed output. STOP
+and reconfiguration clear FIFO, output mapping and readiness proof.
 
 ## Fixtures
 

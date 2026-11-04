@@ -12,7 +12,12 @@ import java.util.concurrent.TimeUnit
 @RunWith(AndroidJUnit4::class)
 class SilentAudioClockTest {
     @Test(timeout = 10_000)
-    fun productionPcmOutputRunsPastTwoSecondsWithRealClockAndRateCorrection() {
+    fun productionPcmOutputRunsPastTwoSecondsWithRealClockAndRateCorrection() = playback(120, false)
+
+    @Test(timeout = 150_000)
+    fun smallScriptedRateTransitionsKeepRealPcmPlaybackAlivePastTheReportedStopTime() = playback(6000, true)
+
+    private fun playback(packets: Int, scriptedRates: Boolean) {
         val failures = ConcurrentLinkedQueue<String>()
         val corrections = ConcurrentLinkedQueue<Float>()
         val readings = ConcurrentLinkedQueue<AudioOutputTiming>()
@@ -26,8 +31,10 @@ class SilentAudioClockTest {
         val platform = PlatformAudioOutput(format, failure)
         val output = object : AudioOutput by platform {
             override fun setSpeed(speed: Float) {
-                platform.setSpeed(speed)
-                corrections.add(speed)
+                val values = listOf(1.001294f, 1.0012041f, 1.00125f, 1f, 0.998706f, 0.9987959f, 0.99875f, 1f)
+                val requested = if (scriptedRates) values[corrections.size % values.size] else speed
+                platform.setSpeed(requested)
+                corrections.add(platform.preparedSpeed)
             }
         }
         var player: AudioPlayer? = null
@@ -44,7 +51,7 @@ class SilentAudioClockTest {
             worker.start()
             val started = System.nanoTime()
             var previousPresented = 0L
-            repeat(120) { index ->
+            repeat(packets) { index ->
                 val remaining = started + index * 20_000_000L - System.nanoTime()
                 if (remaining > 0) TimeUnit.NANOSECONDS.sleep(remaining)
                 assertTrue("BLOCKED/FAILED: silent output requires a working Android output route: $failures", failures.isEmpty())
@@ -56,17 +63,19 @@ class SilentAudioClockTest {
             }
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
             var timing = platform.timing()
-            while ((timing.submittedFrames < 115_200 || timing.consumedFrames < 115_200 || corrections.size < 2) &&
+            val expectedFrames = packets * 960L
+            val expectedUs = packets * 20_000L
+            while ((worker.sourceSubmittedFrames < expectedFrames || worker.sourcePositionUs() < expectedUs || corrections.size < 2) &&
                 failures.isEmpty() && System.nanoTime() < deadline) {
                 Thread.sleep(5)
                 timing = platform.timing()
                 checkBudget(timing)
             }
             assertTrue("BLOCKED/FAILED: actual PCM output failed: $failures", failures.isEmpty())
-            assertEquals("BLOCKED/FAILED: not all silent PCM reached the real AudioTrack", 115_200L, timing.submittedFrames)
-            assertEquals("BLOCKED/FAILED: real client consumption stopped", 115_200L, timing.consumedFrames)
+            assertEquals("BLOCKED/FAILED: not all source PCM reached the real AudioTrack", expectedFrames, worker.sourceSubmittedFrames)
+            assertEquals("BLOCKED/FAILED: real source presentation stopped", expectedUs, worker.sourcePositionUs())
             assertTrue("Actual runtime rate correction was not exercised twice", corrections.size >= 2)
-            assertTrue(corrections.all { it in 0.995f..1.005f })
+            assertTrue(corrections.all { it in 0.98f..1.02f })
             assertTrue(readings.size >= 2)
             readings.forEach(::checkBudget)
             assertTrue(System.nanoTime() - started > TimeUnit.SECONDS.toNanos(2))

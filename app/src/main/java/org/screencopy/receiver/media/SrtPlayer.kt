@@ -17,6 +17,7 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.ForwardingRenderer
 import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.MediaClock
 import androidx.media3.exoplayer.RendererConfiguration
 import androidx.media3.exoplayer.RenderersFactory
 import androidx.media3.exoplayer.analytics.AnalyticsListener
@@ -25,6 +26,10 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.source.SampleStream
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.AudioTrackAudioOutputProvider
+import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioTrackBufferSizeProvider
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.extractor.ExtractorsFactory
 import org.json.JSONObject
@@ -33,7 +38,7 @@ import org.screencopy.receiver.protocol.SrtTransport
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
-/** Media3 owns demux, codecs, AudioTrack, timing and A/V synchronization; no custom clock. */
+/** Media3 owns demux/codecs/output; decoded FIFO regulation and immediate video keep latency bounded. */
 @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
 class SrtPlayer(
     context: Context,
@@ -60,6 +65,7 @@ class SrtPlayer(
     private val diagnostics = SrtSessionDiagnostics.create(this.context, transport.streamId, request.videoCodec, request.audioCodec)
         .also { inputs.attach(it) }
     private val extractionProgress = SrtExtractionProgress()
+    @Volatile private var audioSink: SrtLowLatencyAudioSink? = null
     // All fields below are owned exclusively by mainLooper.
     private var player: ExoPlayer? = null
     private var videoRendered = false
@@ -79,18 +85,37 @@ class SrtPlayer(
         handoff {
             if (closed.get()) return@handoff
             check(surface.isValid) { "SRT Surface unavailable" }
-            val defaults = DefaultRenderersFactory(context)
+            val defaults = object : DefaultRenderersFactory(context) {
+                override fun buildAudioSink(context: Context, enableFloatOutput: Boolean,
+                    enableAudioOutputPlaybackParams: Boolean): AudioSink {
+                    val output = AudioTrackAudioOutputProvider.Builder(context)
+                        .setAudioTrackBufferSizeProvider(DefaultAudioTrackBufferSizeProvider.Builder()
+                            .setTargetPcmBufferDurationUs(5000).build()).build()
+                    return SrtLowLatencyAudioSink(DefaultAudioSink.Builder(context).setEnableFloatOutput(false)
+                        .setEnableAudioOutputPlaybackParameters(false).setAudioOutputProvider(output).build(),
+                        opus = audioMime == MimeTypes.AUDIO_OPUS)
+                        .also { audioSink = it }
+                }
+            }
             val renderers = RenderersFactory { handler, video, audio, text, metadata ->
                 defaults.createRenderers(handler, video, audio, text, metadata).map { renderer ->
-                    if (audioExpected && renderer.trackType == C.TRACK_TYPE_VIDEO)
-                        SrtSparseVideoRenderer(renderer, videoReadiness) else renderer
+                    when (renderer.trackType) {
+                        C.TRACK_TYPE_VIDEO -> {
+                            renderer.release()
+                            val immediate = SrtImmediateVideoRenderer(context, handler, video) { extractionProgress.sourceOriginUs }
+                            SrtSparseVideoRenderer(immediate, videoReadiness)
+                        }
+                        C.TRACK_TYPE_AUDIO -> SrtRecoveredAudioRenderer(renderer,
+                            { audioSink?.setPlaybackPositionUs(it) }) { audioSink?.sourceAdvanced == true }
+                        else -> renderer
+                    }
                 }.toTypedArray()
             }
             val next = ExoPlayer.Builder(context, renderers)
                 .setLooper(main.looper)
-                .setLoadControl(DefaultLoadControl.Builder()
-                    .setBufferDurationsMs(100, 1000, 0, 0)
-                    .setPrioritizeTimeOverSizeThresholds(true).build())
+                .setLoadControl(SrtLiveLoadControl(DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(50, 250, 0, 0)
+                    .setPrioritizeTimeOverSizeThresholds(true).build()) { extractionProgress.sourceOriginUs })
                 .build()
             player = next
             next.addListener(object : Player.Listener {
@@ -143,6 +168,11 @@ class SrtPlayer(
                     dropped += droppedFrames
                     publish()
                 }
+                override fun onAudioUnderrun(eventTime: AnalyticsListener.EventTime, bufferSize: Int,
+                    bufferSizeMs: Long, elapsedSinceLastFeedMs: Long) {
+                    Log.w("ScreenCopySrt", "event=AUDIO_UNDERRUN_RECOVERY buffer_bytes=$bufferSize" +
+                        " buffer_ms=$bufferSizeMs feed_gap_ms=$elapsedSinceLastFeedMs")
+                }
             })
             next.setVideoSurface(surface)
             val sourceFactory = if (fixtureUri == null) inputs else {
@@ -168,8 +198,13 @@ class SrtPlayer(
     }
 
     private fun publish() {
-        if (closed.get() || failure != null || !videoRendered || audioExpected && !audioAdvancing ||
-            width <= 0 || height <= 0 || decoder.isEmpty()) return
+        if (closed.get() || failure != null) return
+        if (!videoRendered || !videoReadiness.hasRenderedFrame() ||
+            audioExpected && (!audioAdvancing || audioSink?.sourceAdvanced != true) ||
+            width <= 0 || height <= 0 || decoder.isEmpty()) {
+            result.set("")
+            return
+        }
         val current = player ?: return
         val videoCounters = current.videoDecoderCounters
         val audioCounters = current.audioDecoderCounters
@@ -195,7 +230,10 @@ class SrtPlayer(
     override fun poll(): String {
         if (closed.get()) return ""
         handoff { publish() }
-        return result.get()
+        val current = result.get()
+        if (!current.startsWith("ERROR:") &&
+            (!videoReadiness.hasRenderedFrame() || audioExpected && audioSink?.sourceAdvanced != true)) return ""
+        return current
     }
 
     internal fun diagnosticsForTests(): String {
@@ -205,8 +243,17 @@ class SrtPlayer(
         val audio = current?.audioDecoderCounters
         video?.ensureUpdated()
         audio?.ensureUpdated()
-        return JSONObject().put("firstFrame", videoRendered).put("audioProof", audioAdvancing)
+        return JSONObject().put("firstFrame", videoRendered)
+            .put("audioProof", audioAdvancing && audioSink?.sourceAdvanced == true)
+            .put("audioSourcePositionUs", audioSink?.sourcePositionUs ?: 0)
+            .put("sourceOriginUs", extractionProgress.sourceOriginUs)
+            .put("audioRegulation", audioSink?.regulation?.let {
+                JSONObject().put("sourceFrames", it.sourceFrames).put("silenceFrames", it.silenceFrames)
+                    .put("droppedFrames", it.droppedFrames).put("speed", it.speed)
+            })
             .put("inputReadCalls", inputs.readCalls.get())
+            .put("inputMaxReadWaitUs", inputs.maxReadWaitUs)
+            .put("inputMaxReadCallGapUs", inputs.maxReadCallGapUs)
             .put("inputCompletedReads", inputs.completedReads.get())
             .put("inputBytes", inputs.receivedBytes.get())
             .put("extractorReadCalls", extractionProgress.readCalls.get())
@@ -246,7 +293,7 @@ class SrtPlayer(
         releaseAttempted = true
         val previous = player
         player = null
-        previous?.release()
+        try { previous?.release() } finally { audioSink = null }
         released.set(true)
     }
 
@@ -305,7 +352,30 @@ internal class SrtVideoReadiness(private val post: (() -> Unit) -> Unit) {
     fun hasRenderedFrame(): Boolean = current.get().let { it.active && it.rendered.get() }
 }
 
-/** A held live picture remains valid while the unmodified Media3 audio renderer advances. */
+@androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
+internal class SrtRecoveredAudioRenderer(renderer: Renderer,
+    private val onPosition: (Long) -> Unit = {}, private val sourceAdvanced: () -> Boolean) :
+    ForwardingRenderer(renderer) {
+    // Source-only audio time must not stop loading/video while the device plays recovery silence.
+    override fun getMediaClock(): MediaClock? = null
+
+    override fun render(positionUs: Long, elapsedRealtimeUs: Long) {
+        onPosition(positionUs)
+        super.render(positionUs, elapsedRealtimeUs)
+    }
+
+    override fun getDurationToProgressUs(positionUs: Long, elapsedRealtimeUs: Long): Long =
+        minOf(5000, super.getDurationToProgressUs(positionUs, elapsedRealtimeUs))
+
+    override fun isReady(): Boolean {
+        if (super.isReady()) return true
+        if (!sourceAdvanced()) return false
+        super.maybeThrowStreamError()
+        return true
+    }
+}
+
+/** A held live picture keeps scheduling/loading active, including video-only streams. */
 @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
 internal class SrtSparseVideoRenderer(
     renderer: Renderer,

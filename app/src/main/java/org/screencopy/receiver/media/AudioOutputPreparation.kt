@@ -34,11 +34,17 @@ data class OutputPreparationDiagnostic(
     val maxFrames: Int,
     val speed: Float,
     val actualSampleRate: Int = 0,
-    val actualChannels: Int = 0
+    val actualChannels: Int = 0,
+    val actualSpeed: Float? = null,
+    val actualPitch: Float? = null,
+    val failOnUnsupported: Boolean? = null
 ) {
     fun logMessage() = "output_reason=$reason sample_rate=$sampleRate channels=$channels minimum_frames=$minimumFrames" +
         " requested_frames=$requestedFrames buffer_frames=$bufferFrames capacity_frames=$capacityFrames" +
-        " max_frames=$maxFrames intended_speed=$speed actual_sample_rate=$actualSampleRate actual_channels=$actualChannels"
+        " max_frames=$maxFrames intended_speed=$speed actual_sample_rate=$actualSampleRate actual_channels=$actualChannels" +
+        (actualSpeed?.let { " actual_speed=$it" } ?: "") +
+        (actualPitch?.let { " actual_pitch=$it" } ?: "") +
+        (failOnUnsupported?.let { " fail_on_unsupported=$it" } ?: "")
 
     companion object {
         internal fun fromLocalDetail(detail: String): OutputPreparationDiagnostic? {
@@ -54,7 +60,9 @@ data class OutputPreparationDiagnostic(
                 integer("channels") ?: return null, integer("minimum_frames") ?: return null,
                 integer("requested_frames") ?: return null, integer("buffer_frames") ?: return null,
                 integer("capacity_frames") ?: return null, integer("max_frames") ?: return null, speed,
-                integer("actual_sample_rate") ?: return null, integer("actual_channels") ?: return null)
+                integer("actual_sample_rate") ?: return null, integer("actual_channels") ?: return null,
+                fields["actual_speed"]?.toFloatOrNull(), fields["actual_pitch"]?.toFloatOrNull(),
+                fields["fail_on_unsupported"]?.toBooleanStrictOrNull())
         }
     }
 }
@@ -65,14 +73,26 @@ class AudioOutputPreparationException(val diagnostic: OutputPreparationDiagnosti
 }
 
 internal data class AudioBufferPlan(
-    val sampleRate: Int, val channels: Int, val minimumFrames: Int, val frames: Int, val bytes: Int
+    val sampleRate: Int, val channels: Int, val minimumFrames: Int, val frames: Int, val bytes: Int,
+    val maxFrames: Int
 )
 
 internal object AudioOutputPreparation {
-    const val MIN_SPEED = 0.995f
-    const val MAX_SPEED = 1.005f
+    const val MIN_SPEED = 0.98f
+    const val MAX_SPEED = 1.02f
     const val NOMINAL_SPEED = 1f
     const val MAX_BUFFER_MS = 130
+    const val REQUESTED_BUFFER_MS = 5
+    // AudioTrack may intentionally retain the prior speed for smaller native deltas.
+    const val NATIVE_SPEED_DEADBAND = 0.0001f
+
+    fun rateMatches(device: RateAudioTrack, requested: Float): Boolean {
+        val actual = device.speed
+        val pitch = device.pitch
+        return actual.isFinite() && actual in MIN_SPEED..MAX_SPEED &&
+            abs(actual - requested) < NATIVE_SPEED_DEADBAND &&
+            pitch.isFinite() && abs(pitch - 1f) <= 0.00001f && device.failOnUnsupported
+    }
 
     fun plan(format: AudioFormat, minimumBytes: Int): AudioBufferPlan {
         require(format.sampleRate in 1..96000 && format.channels in 1..2) { "Invalid PCM output format" }
@@ -85,28 +105,49 @@ internal object AudioOutputPreparation {
             throw AudioOutputPreparationException(OutputPreparationDiagnostic(OutputPreparationReason.BUFFER_LIMIT,
                 format.sampleRate, format.channels, minimumFrames, maxFrames, 0, 0, maxFrames, MAX_SPEED))
         }
-        // Reserve the existing bounded headroom; do not assume the nominal getMinBufferSize covers speed.
-        return AudioBufferPlan(format.sampleRate, format.channels, minimumFrames, maxFrames, maxFrames * frameBytes)
+        val requested = maxOf(format.sampleRate * REQUESTED_BUFFER_MS / 1000, rateMinimum.toInt())
+        return AudioBufferPlan(format.sampleRate, format.channels, minimumFrames, requested, requested * frameBytes, maxFrames)
     }
 
-    fun open(format: AudioFormat, platform: AudioOutputPlatform, failure: (String, String) -> Unit): Pair<RateAudioTrack, AudioBufferPlan> {
+    fun open(format: AudioFormat, platform: AudioOutputPlatform, failure: (String, String) -> Unit,
+        onHeadroomRetry: (OutputPreparationDiagnostic) -> Unit = {}): Pair<RateAudioTrack, AudioBufferPlan> {
         val plan = plan(format, platform.minimumBytes(format))
+        try {
+            return prepare(format, plan, platform, failure)
+        } catch (error: AudioOutputPreparationException) {
+            if (error.diagnostic.reason != OutputPreparationReason.RATE_UNSUPPORTED ||
+                error.cause !is IllegalArgumentException || error.suppressed.isNotEmpty() || plan.frames == plan.maxFrames) throw error
+            onHeadroomRetry(error.diagnostic)
+            val bounded = plan.copy(frames = plan.maxFrames, bytes = plan.maxFrames * plan.channels * 2)
+            try {
+                return prepare(format, bounded, platform, failure)
+            } catch (retry: AudioOutputPreparationException) {
+                retry.addSuppressed(error)
+                throw retry
+            }
+        }
+    }
+
+    private fun prepare(format: AudioFormat, plan: AudioBufferPlan, platform: AudioOutputPlatform,
+        failure: (String, String) -> Unit): Pair<RateAudioTrack, AudioBufferPlan> {
         val device = try { platform.create(format, plan.bytes, failure) } catch (e: Exception) {
             throw AudioOutputPreparationException(OutputPreparationDiagnostic(OutputPreparationReason.TRACK_INITIALIZATION,
-                plan.sampleRate, plan.channels, plan.minimumFrames, plan.frames, 0, 0, plan.frames, MAX_SPEED), e)
+                plan.sampleRate, plan.channels, plan.minimumFrames, plan.frames, 0, 0, plan.maxFrames, MAX_SPEED), e)
         }
         var checkingSpeed = NOMINAL_SPEED
         fun diagnostic(reason: OutputPreparationReason): OutputPreparationDiagnostic {
             val initialized = device.initialized
             return OutputPreparationDiagnostic(reason, plan.sampleRate, plan.channels, plan.minimumFrames, plan.frames,
                 if (initialized) device.bufferFrames else 0, if (initialized) device.capacityFrames else 0,
-                plan.frames, checkingSpeed, if (initialized) device.sampleRate else 0, if (initialized) device.channels else 0)
+                plan.maxFrames, checkingSpeed, if (initialized) device.sampleRate else 0, if (initialized) device.channels else 0,
+                if (initialized) device.speed else null, if (initialized) device.pitch else null,
+                if (initialized) device.failOnUnsupported else null)
         }
         fun verify() {
             if (!device.initialized) throw AudioOutputPreparationException(diagnostic(OutputPreparationReason.TRACK_INITIALIZATION))
             if (device.sampleRate != plan.sampleRate || device.channels != plan.channels || !device.pcm16)
                 throw AudioOutputPreparationException(diagnostic(OutputPreparationReason.FORMAT_MISMATCH))
-            if (device.bufferFrames !in plan.minimumFrames..plan.frames || device.capacityFrames !in device.bufferFrames..plan.frames)
+            if (device.bufferFrames !in plan.minimumFrames..plan.maxFrames || device.capacityFrames !in device.bufferFrames..plan.maxFrames)
                 throw AudioOutputPreparationException(diagnostic(OutputPreparationReason.BUFFER_LIMIT))
             if (device.isPlaying) throw AudioOutputPreparationException(diagnostic(OutputPreparationReason.PLAY_STATE))
         }
@@ -116,8 +157,7 @@ internal object AudioOutputPreparation {
                 checkingSpeed = speed
                 device.setSpeed(speed)
                 verify()
-                if (!device.speed.isFinite() || !device.pitch.isFinite() || !device.failOnUnsupported ||
-                    abs(device.speed - speed) > 0.00001f || abs(device.pitch - 1f) > 0.00001f)
+                if (!rateMatches(device, speed))
                     throw AudioOutputPreparationException(diagnostic(OutputPreparationReason.PARAMS_MISMATCH))
             }
             return device to plan

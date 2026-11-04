@@ -161,14 +161,14 @@ class OpusPtsOrderTest {
                 assertEquals(pts, message.ptsUs)
                 player.offer(AccessUnit(message.ptsUs, message.payload))
                 val frames = (index + 1) * 960 - 312
-                await { output.frames.get() >= frames || errors.isNotEmpty() }
+                await { player.sourceSubmittedFrames >= frames || errors.isNotEmpty() }
                 assertTrue(errors.toString(), errors.isEmpty())
                 if (index == 0) liveStart = now.get()
                 val current = checkNotNull(clock.currentUs())
                 assertTrue("Source observation reversals must not rewind presentation", current >= previous)
                 previous = current
             }
-            assertEquals(points.size * 960L - 312, output.frames.get())
+            assertEquals(points.size * 960L - 312, player.sourceSubmittedFrames)
             assertEquals(1296L + (2..points.size).sumOf { it * 1920L }, output.sum.get())
             assertEquals(points.size, decoded.get())
             assertTrue(received.all { it.contentEquals(packet()) })

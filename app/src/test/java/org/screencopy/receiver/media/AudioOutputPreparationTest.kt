@@ -11,16 +11,80 @@ import java.util.concurrent.atomic.AtomicLong
 class AudioOutputPreparationTest {
     private val format = AudioFormat("pcm", 48000, 2, byteArrayOf())
 
-    @Test fun exactGalaxy5760Versus5793FixtureIsPreparedAtBounded6240Frames() {
+    @Test fun nativeSmallRateDeadbandDoesNotBecomeAFatalMismatch() {
+        val platform = FakePlatform(adjust = { it.minimumSpeedDelta = 0.0001f })
+        PlatformAudioOutput(format, { _, _ -> }, platform).use { output ->
+            output.setSpeed(1.001294f)
+            output.setSpeed(1.0012041f)
+            assertEquals(1.001294f, output.preparedSpeed, 0f)
+            output.setSpeed(1f)
+            assertEquals(1f, output.preparedSpeed, 0f)
+            assertFalse(output.isPlaying)
+        }
+    }
+
+    @Test fun nativeDeadbandNeverAllowsTheActualRateOutsideTheTwoPercentEnvelope() {
+        val track = FakeTrack(format, 6240, 5793, null)
+        track.actualSpeed = 1.02005f
+        assertFalse(AudioOutputPreparation.rateMatches(track, 1.02f))
+        track.actualSpeed = 0.97995f
+        assertFalse(AudioOutputPreparation.rateMatches(track, 0.98f))
+        track.actualSpeed = 1f
+        assertFalse(AudioOutputPreparation.rateMatches(track, 1.0012041f))
+    }
+
+    @Test fun smallDeviceMinimumRequestsFiveMsRatherThanTheFullRouteCeiling() {
+        val plan = AudioOutputPreparation.plan(format, 128 * 4)
+        assertEquals(240, plan.frames)
+        assertEquals(960, plan.bytes)
+        assertEquals(6240, plan.maxFrames)
+    }
+    @Test fun nativeRateHeadroomCanExceedTheNominalFormulaButNeverTheExistingCeiling() {
+        val tracks = mutableListOf<FakeTrack>()
+        val retries = mutableListOf<OutputPreparationDiagnostic>()
+        val platform = object : AudioOutputPlatform {
+            override fun minimumBytes(format: AudioFormat) = 5760 * 4
+            override fun create(format: AudioFormat, bytes: Int, failure: (String, String) -> Unit): RateAudioTrack =
+                FakeTrack(format, bytes / 4, 6100, null).also(tracks::add)
+        }
+        val (track, plan) = AudioOutputPreparation.open(format, platform, { _, _ -> }, retries::add)
+        try {
+            assertEquals(listOf(5876, 6240), tracks.map { it.capacityFrames })
+            assertEquals(1, tracks.first().releases)
+            assertEquals(1, retries.size)
+            assertEquals(5876, retries.single().requestedFrames)
+            assertEquals(6240, plan.frames)
+            assertEquals(listOf(1.02f, 0.98f, 1f), tracks.last().requests.toList())
+            assertFalse(track.isPlaying)
+        } finally { track.close() }
+    }
+
+    @Test fun permanentlyUnsupportedRateRemainsExplicitAfterOneBoundedRetry() {
+        val tracks = mutableListOf<FakeTrack>()
+        val platform = object : AudioOutputPlatform {
+            override fun minimumBytes(format: AudioFormat) = 5760 * 4
+            override fun create(format: AudioFormat, bytes: Int, failure: (String, String) -> Unit): RateAudioTrack =
+                FakeTrack(format, bytes / 4, 7000, null).also(tracks::add)
+        }
+        val error = assertThrows(AudioOutputPreparationException::class.java) {
+            AudioOutputPreparation.open(format, platform, { _, _ -> })
+        }
+        assertEquals(OutputPreparationReason.RATE_UNSUPPORTED, error.diagnostic.reason)
+        assertEquals(listOf(5876, 6240), tracks.map { it.capacityFrames })
+        assertTrue(tracks.all { it.releases == 1 && it.plays == 0 })
+        assertEquals(1, error.suppressed.size)
+    }
+
+    @Test fun exactGalaxyMinimumIsPreparedForTwoPercentWithoutReservingTheEntire130msBudget() {
         val platform = FakePlatform()
         val old = FakeTrack(format, 5760, 5793, null)
         assertThrows(IllegalArgumentException::class.java) { old.setSpeed(1.005f) }
         val output = PlatformAudioOutput(format, { _, _ -> fail("No asynchronous error during prepare") }, platform)
         try {
             val track = checkNotNull(platform.created)
-            assertEquals(6240, output.bufferFrames)
-            assertEquals(6240, output.capacityFrames)
-            assertEquals(listOf(1.005f, 0.995f, 1f), track.requests.toList())
+            assertEquals(5876, output.bufferFrames)
+            assertEquals(5876, output.capacityFrames)
+            assertEquals(listOf(1.02f, 0.98f, 1f), track.requests.toList())
             assertEquals(1f, output.preparedSpeed, 0f)
             assertFalse(output.isPlaying)
             assertEquals(0, track.plays)
@@ -40,7 +104,7 @@ class AudioOutputPreparationTest {
                 assertEquals(0, plan.bytes % (channels * 2))
                 assertEquals(plan.frames * channels * 2, plan.bytes)
                 assertTrue(plan.frames * 1000L <= rate * 130L)
-                assertTrue(plan.frames > plan.minimumFrames * 1.005)
+                assertTrue(plan.frames > plan.minimumFrames * 1.02)
             }
         }
         assertThrows(IllegalArgumentException::class.java) { AudioOutputPreparation.plan(format.copy(channels = 0), 1024) }
@@ -71,7 +135,7 @@ class AudioOutputPreparationTest {
     }
 
     @Test fun fastOrSlowUnsupportedFailsAtPreparationNotAfterPlayback() {
-        for (rejected in listOf(1.005f, 0.995f)) {
+        for (rejected in listOf(1.02f, 0.98f)) {
             val platform = FakePlatform(adjust = { it.reject = rejected })
             val failure = assertThrows(AudioOutputPreparationException::class.java) { PlatformAudioOutput(format, { _, _ -> }, platform) }
             assertEquals(OutputPreparationReason.RATE_UNSUPPORTED, failure.diagnostic.reason)
@@ -111,13 +175,13 @@ class AudioOutputPreparationTest {
     @Test fun failedNominalResetIsFatalAndStillReleasesTheTrack() {
         val platform = FakePlatform(adjust = { it.reject = 1f })
         val failure = assertThrows(AudioOutputPreparationException::class.java) { PlatformAudioOutput(format, { _, _ -> }, platform) }
-        assertEquals(listOf(1.005f, 0.995f, 1f), platform.created?.requests?.toList())
+        assertEquals(listOf(1.02f, 0.98f, 1f), platform.created?.requests?.toList())
         assertEquals(1f, failure.diagnostic.speed, 0f)
         assertEquals(1, platform.created?.releases)
         assertEquals(0, platform.created?.plays)
     }
 
-    @Test fun productionAudioPlayerFirstFastCorrectionAfterOneSecondUsesPreparedOutput() {
+    @Test fun productionAudioPlayerCorrectionsUseThePreparedEnvelope() {
         val now = AtomicLong()
         val waits = AtomicInteger()
         val tick = Semaphore(0)
@@ -128,7 +192,7 @@ class AudioOutputPreparationTest {
         val player = AudioPlayer(format, clock, { code, detail -> errors.add("$code: $detail") },
             { PlatformAudioOutput(format, { code, detail -> errors.add("$code: $detail") }, platform) })
         val track = checkNotNull(platform.created)
-        assertEquals(listOf(1.005f, 0.995f, 1f), track.requests.toList())
+        assertEquals(listOf(1.02f, 0.98f, 1f), track.requests.toList())
         assertEquals(0, track.plays)
         try {
             player.start()
@@ -139,20 +203,21 @@ class AudioOutputPreparationTest {
                 now.addAndGet(20_000_000)
                 player.offer(packet(index))
                 tick.release()
-                await { waits.get() > priorWait || track.written.get() >= (index + 1) * 1920 || errors.isNotEmpty() }
+                await { waits.get() > priorWait || player.sourceSubmittedFrames >= (index + 1) * 960 || errors.isNotEmpty() }
                 assertTrue(errors.toString(), errors.isEmpty())
             }
-            await { track.written.get() == 66 * 1920 || errors.isNotEmpty() }
+            await { player.sourceSubmittedFrames == 66 * 960L || errors.isNotEmpty() }
             assertTrue(errors.toString(), errors.isEmpty())
-            assertTrue(track.requests.drop(3).contains(1.005f))
-            assertEquals(6240, track.bufferFrames)
-            assertEquals(66 * 1920, track.written.get())
+            assertTrue(track.requests.size > 3)
+            assertTrue(track.requests.all { it in 0.98f..1.02f })
+            assertEquals(5876, track.bufferFrames)
+            assertEquals(66 * 960L, player.sourceSubmittedFrames)
         } finally { tick.release(100); player.close() }
         assertEquals(1, track.releases)
     }
 
     @Test fun unsupportedPreparationStopsAudioPlayerConstructionBeforeAnyPlaybackOrPcm() {
-        val platform = FakePlatform(adjust = { it.reject = 1.005f })
+        val platform = FakePlatform(adjust = { it.reject = 1.02f })
         val clock = PlaybackClock()
         val failure = assertThrows(AudioOutputPreparationException::class.java) {
             AudioPlayer(format, clock, { _, _ -> fail("Worker must not start") },
@@ -167,7 +232,7 @@ class AudioOutputPreparationTest {
     }
 
     @Test fun releaseFailureDoesNotReplaceTheOriginalRatePreparationFailure() {
-        val platform = FakePlatform(adjust = { it.reject = 1.005f; it.throwOnClose = true })
+        val platform = FakePlatform(adjust = { it.reject = 1.02f; it.throwOnClose = true })
         val failure = assertThrows(AudioOutputPreparationException::class.java) { PlatformAudioOutput(format, { _, _ -> }, platform) }
         assertEquals(OutputPreparationReason.RATE_UNSUPPORTED, failure.diagnostic.reason)
         assertEquals(1, failure.suppressed.size)
@@ -209,6 +274,7 @@ class AudioOutputPreparationTest {
         var returnedPitch = 1f
         var reject: Float? = null
         var ignoreSpeed = false
+        var minimumSpeedDelta = 0f
         var autoPlay = false
         var throwOnClose = false
         var plays = 0
@@ -221,7 +287,7 @@ class AudioOutputPreparationTest {
             requests.add(speed)
             if (speed == reject || speed > 1f && capacityFrames < fastMinimum)
                 throw IllegalArgumentException("private vendor buffer-size text")
-            if (!ignoreSpeed) actualSpeed = speed
+            if (!ignoreSpeed && kotlin.math.abs(actualSpeed - speed) >= minimumSpeedDelta) actualSpeed = speed
             if (autoPlay) isPlaying = true
         }
         override fun play() { plays++; isPlaying = true; startNs = now?.get() ?: 0 }

@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">ScrcpyReceive</string>
     <string name="brand">SCRCPYRECEIVE</string>
-    <string name="receiver_ip">RECEIVER IP ADDRESS:PORT</string>
+    <string name="receiver_ip">RECEIVER IP ADDRESS : PORT</string>
     <string name="address_unavailable">Connect to Wi-Fi or Ethernet</string>
     <string name="status_starting">Starting receiver</string>
     <string name="status_ready">Ready</string>

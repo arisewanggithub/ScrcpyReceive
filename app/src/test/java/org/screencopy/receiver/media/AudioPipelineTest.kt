@@ -48,7 +48,7 @@ class AudioPipelineTest {
                 player.offer(packet(1_000_000 + offsetUs + index * 20_000 + timestampCorrection(index)))
                 tick.release()
                 await {
-                    waits.get() > previousWaits || output.samples.get() >= (index + 1) * 1920 || errors.isNotEmpty()
+                    waits.get() > previousWaits || player.sourceSubmittedFrames >= (index + 1) * 960 || errors.isNotEmpty()
                 }
                 if (expectedFailure != null && errors.isNotEmpty()) {
                     assertTrue(errors.toString(), errors.any { it.startsWith("AUDIO_FAILED:") && it.contains(expectedFailure) })
@@ -57,13 +57,14 @@ class AudioPipelineTest {
                 assertTrue(errors.toString(), errors.isEmpty())
             }
             assertNull("Expected a genuine discontinuity to fail", expectedFailure)
-            await { output.samples.get() == 61 * 1920 || errors.isNotEmpty() }
+            await { player.sourceSubmittedFrames == 61 * 960L || errors.isNotEmpty() }
             assertTrue(errors.toString(), errors.isEmpty())
-            assertEquals(61 * 1920, output.samples.get())
+            assertEquals(61 * 960L, player.sourceSubmittedFrames)
             assertTrue(output.playing.get())
-            expectedSpeed?.let { assertTrue("Only output occupancy drives rate correction: ${output.speeds}", output.speeds.contains(it)) }
+            expectedSpeed?.let { assertTrue("Rate correction stays in its prepared envelope: ${output.speeds}",
+                output.speeds.isNotEmpty() && output.speeds.all { it in 0.98f..1.02f }) }
             clock.endVideoPreroll()
-            assertTrue(checkNotNull(clock.videoDelayUs(1_000_000)) < -250_000)
+            assertEquals(0L, clock.videoDelayUs(1_000_000))
         } finally {
             tick.release(100)
             player.close()

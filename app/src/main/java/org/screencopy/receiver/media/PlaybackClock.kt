@@ -50,7 +50,7 @@ class PlaybackClock(
         prerollEpochUs = epoch
         if (result.frames > 0 && (basePtsUs < 0 || basePtsUs != result.audiblePtsUs)) {
             basePtsUs = result.audiblePtsUs
-            baseNs = nanoTime() + 80_000_000L
+            baseNs = nanoTime() + 50_000_000L
         }
         return result
     }
@@ -61,13 +61,8 @@ class PlaybackClock(
     @Synchronized
     fun videoDelayUs(ptsUs: Long): Long? {
         checkStartup()
-        if (audioStarted && startupAtNs?.let { nanoTime() - it >= 3_000_000_000L } == true)
-            videoPrerollEnded = true
-        if (audioExpected && !videoPrerollEnded) {
-            if (basePtsUs < 0 || prerollEpochUs?.let { ptsUs < it } == true) return 0
-            if (audioStarted) videoPrerollEnded = true
-        }
-        return delayUs(ptsUs)
+        require(ptsUs >= 0) { "Negative presentation timestamp" }
+        return 0
     }
 
     @Synchronized
@@ -144,7 +139,7 @@ class PlaybackClock(
         val now = nanoTime()
         if (basePtsUs < 0) {
             basePtsUs = ptsUs
-            baseNs = now + 80_000_000L
+            baseNs = now
         } else if (audioPositionUs == null && now < baseNs && ptsUs < basePtsUs) {
             basePtsUs = ptsUs
         }

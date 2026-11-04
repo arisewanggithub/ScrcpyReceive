@@ -60,6 +60,11 @@ internal class SrtAvcExtractor(
                         }
                         actual.format(format)
                     }
+                    override fun sampleMetadata(timeUs: Long, flags: Int, size: Int, offset: Int,
+                        cryptoData: TrackOutput.CryptoData?) {
+                        progress.firstSample(type, timeUs)
+                        actual.sampleMetadata(timeUs, flags, size, offset, cryptoData)
+                    }
                 }
                 return if (type == C.TRACK_TYPE_VIDEO) SrtAvcTrackOutput(track, progress).also(videoOutputs::add) else track
             }
@@ -80,6 +85,25 @@ internal class SrtAvcExtractor(
 }
 
 internal class SrtExtractionProgress {
+    private val firstVideoPtsUs = AtomicLong(C.TIME_UNSET)
+    private val firstAudioPtsUs = AtomicLong(C.TIME_UNSET)
+    val sourceOriginUs: Long
+        get() {
+            val video = firstVideoPtsUs.get()
+            val audio = firstAudioPtsUs.get()
+            val first = when {
+                video == C.TIME_UNSET -> audio
+                audio == C.TIME_UNSET -> video
+                else -> minOf(video, audio)
+            }
+            return if (first == C.TIME_UNSET) 0 else first.coerceAtLeast(0)
+        }
+    fun firstSample(type: Int, timeUs: Long) {
+        when (type) {
+            C.TRACK_TYPE_VIDEO -> firstVideoPtsUs.compareAndSet(C.TIME_UNSET, timeUs)
+            C.TRACK_TYPE_AUDIO -> firstAudioPtsUs.compareAndSet(C.TIME_UNSET, timeUs)
+        }
+    }
     val readCalls = AtomicLong()
     val completedReads = AtomicLong()
     val videoBytes = AtomicLong()

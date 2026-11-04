@@ -490,7 +490,8 @@ class ReceiverServer private constructor(
                 audio = (audioFactory?.invoke(format, clock, failed) ?: AudioPlayer(format, clock, failed,
                     onClockCorrection = { android.util.Log.i("ScreenCopyReceiver", it.logMessage()) },
                     onOutputTiming = { android.util.Log.i("ScreenCopyReceiver", "event=AUDIO_OUTPUT_CLOCK stage=RATE_CORRECTION ${it.logMessage()}") },
-                    onUnderrunRecovery = { android.util.Log.w("ScreenCopyReceiver", it.logMessage()) })).also { it.start() }
+                    onUnderrunRecovery = { android.util.Log.w("ScreenCopyReceiver", it.logMessage()) },
+                    onRegulation = { android.util.Log.i("ScreenCopyReceiver", it.logMessage()) })).also { it.start() }
                 actualAudio = "Actual audio: ${format.codec} ${format.sampleRate} Hz ${format.channels}ch, pre-skip ${format.preSkip}, generation ${message.generation}\n${checkNotNull(audio).decoderDescription}"
             }
             trackState.ready(message.track)

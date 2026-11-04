@@ -9,6 +9,20 @@ import java.lang.reflect.Proxy
 
 @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
 class SrtSparseVideoRendererTest {
+    @Test fun recoveredAudioNeedsRealSourceProofAndNeverHidesAStreamError() {
+        val f = Fixture()
+        var sourceAdvanced = false
+        val audio = SrtRecoveredAudioRenderer(f.delegate) { sourceAdvanced }
+        assertFalse(audio.isReady())
+        sourceAdvanced = true
+        assertTrue(audio.isReady())
+        assertNull("Source audio clock must not become Media3's loading/presentation master", audio.getMediaClock())
+        f.streamError = IOException("synthetic source failure")
+        assertThrows(IOException::class.java) { audio.isReady() }
+        sourceAdvanced = false
+        assertFalse(audio.isReady())
+    }
+
     private class Fixture {
         val main = ArrayDeque<() -> Unit>()
         val readiness = SrtVideoReadiness { main.addLast(it) }

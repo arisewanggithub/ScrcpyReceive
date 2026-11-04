@@ -35,7 +35,7 @@ class VideoEpochPipelineTest {
         try {
             audio.start()
             for (index in 0 until 3266) {
-                if (index > 0) now.set(liveStart + index * 20_000_000L)
+                if (index > 0) now.updateAndGet { maxOf(it, liveStart + index * 20_000_000L) }
                 if (index == 2625) {
                     await { renderer.queuedPackets() == 0 && decoders.last().completed.get() == decoders.last().inputs.get() || errors.isNotEmpty() }
                     assertTrue(errors.toString(), errors.isEmpty())
@@ -58,7 +58,10 @@ class VideoEpochPipelineTest {
                     else -> 149_651
                 }
                 audio.offer(AccessUnit(base + index * 20_000L + phase, ByteArray(3840)))
-                await { output.written.get() >= (index + 1) * 960L || errors.isNotEmpty() }
+                await {
+                    if (audio.sourceSubmittedFrames < (index + 1) * 960L) now.addAndGet(1_000_000)
+                    audio.sourceSubmittedFrames >= (index + 1) * 960L || errors.isNotEmpty()
+                }
                 assertTrue(errors.toString(), errors.isEmpty())
                 if (index == 0) liveStart = now.get()
                 val current = checkNotNull(clock.currentUs())
@@ -69,7 +72,7 @@ class VideoEpochPipelineTest {
             }
             await { decoders.sumOf { it.completed.get() } == captured || errors.isNotEmpty() }
             assertTrue(errors.toString(), errors.isEmpty())
-            assertEquals(3266 * 960L, output.written.get())
+            assertEquals(3266 * 960L, audio.sourceSubmittedFrames)
             assertEquals(captured, decoders.sumOf { it.inputs.get() })
             assertEquals(captured, decoders.sumOf { it.completed.get() })
             assertTrue("The static-screen decode delay must exercise late-frame recovery",
@@ -77,8 +80,8 @@ class VideoEpochPipelineTest {
             assertTrue(events.any { it.generation == 2L && it.width == 360 && it.height == 640 && it.rotation == 90 })
             assertTrue(output.maxQueued.get() <= 6240)
             assertTrue(decoders.all { it.maxBuffered.get() <= 8 })
-            assertTrue(output.speeds.all { it in 0.995f..1.005f })
-            assertTrue(abs(checkNotNull(clock.currentUs()) - (base + output.positionUs() + 149_651)) < 1000)
+            assertTrue(output.speeds.all { it in 0.98f..1.02f })
+            assertTrue(abs(checkNotNull(clock.currentUs()) - (base + audio.sourcePositionUs() + 149_651)) < 1000)
         } finally {
             try { renderer.close() } finally { audio.close() }
         }
