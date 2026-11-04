@@ -107,12 +107,15 @@ class SourceEpochPipelineTest {
             video?.start()
             var liveStartNs = 0L
             for (index in 0 until packets) {
-                if (index > 0) now.set(liveStartNs + index * frames * 1_000_000_000L / format.sampleRate)
+                if (index > 0) now.updateAndGet { maxOf(it, liveStartNs + index * frames * 1_000_000_000L / format.sampleRate) }
                 video?.offer(AccessUnit(base + index * frames * 1_000_000L / format.sampleRate, byteArrayOf(1)))
                 player.offer(AccessUnit(base + index * frames * 1_000_000L / format.sampleRate + correction(index),
                     ByteArray(frames * format.channels * 2)))
                 val expected = ((index + 1) * frames - format.preSkip).coerceAtLeast(0) * format.channels
-                await { output.written.get() >= expected || errors.isNotEmpty() }
+                await {
+                    if (player.sourceSubmittedFrames * format.channels < expected) now.addAndGet(1_000_000)
+                    player.sourceSubmittedFrames * format.channels >= expected || errors.isNotEmpty()
+                }
                 if (withVideo) {
                     // Do not advance simulated capture time ahead of the three-frame renderer window.
                     await { displayed.get() >= (index - 2).coerceAtLeast(0) || errors.isNotEmpty() }
@@ -134,13 +137,13 @@ class SourceEpochPipelineTest {
                 assertTrue(player.queuedPackets() <= 48)
             }
             assertNull("Expected malformed decoded PTS to fail", expectedFailure)
-            assertEquals((packets * frames - format.preSkip) * format.channels, output.written.get())
+            assertEquals((packets * frames - format.preSkip).toLong(), player.sourceSubmittedFrames)
             expectedOffset?.let {
-                val expected = base + format.preSkip * 1_000_000L / format.sampleRate + output.positionUs() + it
+                val expected = base + format.preSkip * 1_000_000L / format.sampleRate + player.sourcePositionUs() + it
                 assertTrue("Source mapping did not converge: ${clock.currentUs()} vs $expected", abs(checkNotNull(clock.currentUs()) - expected) < 1000)
             }
             expectedRatePpm?.let {
-                val played = output.positionUs()
+                val played = player.sourcePositionUs()
                 val expected = base + played + played * it / 1_000_000
                 assertTrue("Source-rate mapping did not track played samples", abs(checkNotNull(clock.currentUs()) - expected) < 1000)
             }
@@ -151,7 +154,7 @@ class SourceEpochPipelineTest {
             }
             assertTrue(errors.toString(), errors.isEmpty())
             assertTrue(output.maxBufferedUs <= 130_000)
-            assertTrue(output.speeds.all { it in 0.995f..1.005f })
+            assertTrue(output.speeds.all { it in 0.98f..1.02f })
             if (expectedOffset != null) assertTrue(corrections.isNotEmpty())
             assertTrue(output.speeds.isNotEmpty())
         } finally {

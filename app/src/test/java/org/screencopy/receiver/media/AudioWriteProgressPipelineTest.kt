@@ -22,14 +22,14 @@ class AudioWriteProgressPipelineTest {
         }
         fixture.use {
             it.start()
-            await { it.track.accepted.size == 1920 || it.errors.isNotEmpty() }
+            await { it.player.sourceSubmittedFrames == 960L || it.errors.isNotEmpty() }
             assertTrue(it.errors.toString(), it.errors.isEmpty())
-            assertEquals((0 until 1920).map(Int::toShort), it.track.accepted.toList())
+            assertEquals((0 until 1920).map(Int::toShort), it.track.accepted.take(1920))
             assertTrue("Packet elapsed exceeds the unchanged no-progress budget", it.track.elapsedNs > 250_000_000)
             assertTrue(it.track.maximumQueued <= it.track.bufferFrames)
-            assertEquals(960L, it.output.timing().submittedFrames)
+            assertEquals(960L, it.player.sourceSubmittedFrames)
             await { it.clock.currentUs() == 1_020_000L }
-            assertEquals(it.output.positionUs() + 1_000_000, it.clock.currentUs())
+            assertEquals(it.player.sourcePositionUs() + 1_000_000, it.clock.currentUs())
         }
     }
 
@@ -43,9 +43,9 @@ class AudioWriteProgressPipelineTest {
         }
         fixture.use {
             it.start()
-            await { it.track.accepted.size == 1920 || it.errors.isNotEmpty() }
+            await { it.player.sourceSubmittedFrames == 960L || it.errors.isNotEmpty() }
             assertTrue(it.errors.toString(), it.errors.isEmpty())
-            assertEquals((0 until 1920).map(Int::toShort), it.track.accepted.toList())
+            assertEquals((0 until 1920).map(Int::toShort), it.track.accepted.take(1920))
         }
     }
 
@@ -60,9 +60,8 @@ class AudioWriteProgressPipelineTest {
             assertTrue(error, error.contains("Audio output stalled for 250 ms"))
             assertTrue(error, error.contains("event=WRITE_STALL"))
             assertTrue(error, error.contains("recent_progress_ms=300"))
-            assertTrue(error, error.contains("packet_elapsed_ms=300"))
-            assertTrue(error, error.contains("remaining_samples=1920"))
-            assertTrue(error, error.contains("written_samples=0"))
+            assertTrue(error, error.contains("queued_decoded_frames=960"))
+            assertTrue(error, error.contains("source_frames=0"))
             assertTrue(error, error.contains("playing_state=true"))
             assertTrue(error, error.contains("submitted_frames=0"))
             assertTrue(error, error.contains("consumed_frames=0"))
@@ -81,9 +80,8 @@ class AudioWriteProgressPipelineTest {
             await { it.errors.isNotEmpty() }
             val error = it.errors.single()
             assertTrue(error, error.contains("recent_progress_ms=300"))
-            assertTrue(error, error.contains("packet_elapsed_ms=400"))
-            assertTrue(error, error.contains("remaining_samples=1728"))
-            assertTrue(error, error.contains("written_samples=192"))
+            assertTrue(error, error.contains("queued_decoded_frames=864"))
+            assertTrue(error, error.contains("source_frames=96"))
             assertEquals(192, it.track.accepted.size)
         }
     }
@@ -122,7 +120,8 @@ class AudioWriteProgressPipelineTest {
 
     @Test fun writeProgressFixDoesNotEnlargeProducerQueueOrAdmissionTimeout() {
         val entered = CountDownLatch(1)
-        val fixture = Fixture { _, _, _ -> entered.countDown(); 0 }
+        val wait = CountDownLatch(1)
+        val fixture = Fixture { _, _, _ -> entered.countDown(); wait.await(); 0 }
         fixture.use {
             it.start()
             assertTrue(entered.await(2, TimeUnit.SECONDS))
@@ -152,7 +151,7 @@ class AudioWriteProgressPipelineTest {
             object : AudioOutputPlatform {
                 override fun minimumBytes(format: AudioFormat) = 5760 * 4
                 override fun create(format: AudioFormat, bytes: Int, failure: (String, String) -> Unit): RateAudioTrack {
-                    assertEquals(6240 * 4, bytes)
+                    assertEquals(AudioOutputPreparation.plan(format, 5760 * 4).bytes, bytes)
                     return track
                 }
             })

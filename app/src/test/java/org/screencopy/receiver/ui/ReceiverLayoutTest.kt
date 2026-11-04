@@ -41,7 +41,7 @@ class ReceiverLayoutTest {
             .associate { it.getAttribute("name") to it.textContent }
         assertEquals("ScrcpyReceive", texts["app_name"])
         assertEquals("SCRCPYRECEIVE", texts["brand"])
-        assertEquals("RECEIVER IP ADDRESS:PORT", texts["receiver_ip"])
+        assertEquals("RECEIVER IP ADDRESS : PORT", texts["receiver_ip"])
         val application = xml("AndroidManifest.xml").getElementsByTagName("application").item(0) as Element
         assertEquals("@string/app_name", application.getAttributeNS(android, "label"))
     }

@@ -22,14 +22,16 @@ interface AudioOutput : AutoCloseable {
 
 internal class PlatformAudioOutput private constructor(
     format: AudioFormat, failure: (String, String) -> Unit, platform: AudioOutputPlatform,
-    prepared: (String) -> Unit
+    private val prepared: (String) -> Unit
 ) : AudioOutput {
     constructor(format: AudioFormat, failure: (String, String) -> Unit) :
         this(format, failure, AndroidAudioOutputPlatform, { android.util.Log.i("ScreenCopyReceiver", it) })
     internal constructor(format: AudioFormat, failure: (String, String) -> Unit, platform: AudioOutputPlatform) :
         this(format, failure, platform, {})
 
-    private val opened = AudioOutputPreparation.open(format, platform, failure)
+    private val opened = AudioOutputPreparation.open(format, platform, failure) {
+        prepared("event=AUDIO_OUTPUT_HEADROOM_RETRY stage=OUTPUT_PREPARE ${it.logMessage()}")
+    }
     private val device = opened.first
     internal val bufferFrames: Int get() = device.bufferFrames
     internal val capacityFrames: Int get() = device.capacityFrames
@@ -39,7 +41,7 @@ internal class PlatformAudioOutput private constructor(
     init {
         prepared("event=AUDIO_OUTPUT_PREPARED stage=OUTPUT_PREPARE sample_rate=${format.sampleRate}" +
             " channels=${format.channels} buffer_frames=${device.bufferFrames} capacity_frames=${device.capacityFrames}" +
-            " minimum_frames=${opened.second.minimumFrames} requested_frames=${opened.second.frames} max_frames=${opened.second.frames}" +
+            " minimum_frames=${opened.second.minimumFrames} requested_frames=${opened.second.frames} max_frames=${opened.second.maxFrames}" +
             " min_speed=${AudioOutputPreparation.MIN_SPEED} max_speed=${AudioOutputPreparation.MAX_SPEED} nominal_speed=${device.speed}")
     }
     override val underrunCount: Int get() = device.underrunCount
@@ -55,21 +57,24 @@ internal class PlatformAudioOutput private constructor(
         try {
             device.setSpeed(speed)
             reason = OutputPreparationReason.BUFFER_LIMIT
-            check(device.bufferFrames in opened.second.minimumFrames..opened.second.frames &&
-                device.capacityFrames in device.bufferFrames..opened.second.frames) { "Audio output buffer changed beyond prepared budget" }
+            check(device.bufferFrames in opened.second.minimumFrames..opened.second.maxFrames &&
+                device.capacityFrames in device.bufferFrames..opened.second.maxFrames) { "Audio output buffer changed beyond prepared budget" }
             reason = OutputPreparationReason.FORMAT_MISMATCH
             check(device.sampleRate == opened.second.sampleRate && device.channels == opened.second.channels && device.pcm16) {
                 "Audio output format changed after preparation"
             }
             reason = OutputPreparationReason.PARAMS_MISMATCH
-            check(kotlin.math.abs(device.speed - speed) <= 0.00001f && kotlin.math.abs(device.pitch - 1f) <= 0.00001f && device.failOnUnsupported) {
+            check(AudioOutputPreparation.rateMatches(device, speed)) {
                 "Audio output rate unsupported within prepared envelope"
             }
+            if (device.speed != speed)
+                prepared("event=AUDIO_OUTPUT_RATE_READBACK requested_speed=$speed actual_speed=${device.speed}" +
+                    " native_deadband=${AudioOutputPreparation.NATIVE_SPEED_DEADBAND}")
         } catch (e: Exception) {
             val plan = opened.second
             throw AudioOutputPreparationException(OutputPreparationDiagnostic(reason, plan.sampleRate, plan.channels,
-                plan.minimumFrames, plan.frames, device.bufferFrames, device.capacityFrames, plan.frames, speed,
-                device.sampleRate, device.channels), e)
+                plan.minimumFrames, plan.frames, device.bufferFrames, device.capacityFrames, plan.maxFrames, speed,
+                device.sampleRate, device.channels, device.speed, device.pitch, device.failOnUnsupported), e)
         }
     }
     override fun close() = device.close()
@@ -141,7 +146,7 @@ private class AndroidRateAudioTrack(format: AudioFormat, bytes: Int, failure: (S
     override fun setSpeed(speed: Float): Unit = synchronized(position) {
         track.playbackParams = PlaybackParams().allowDefaults().setSpeed(speed).setPitch(1f)
             .setAudioFallbackMode(PlaybackParams.AUDIO_FALLBACK_MODE_FAIL)
-        position.speed(speed)
+        position.speed(track.playbackParams.speed)
     }
     override fun close() {
         playing = false

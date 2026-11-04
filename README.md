@@ -36,6 +36,73 @@ identify internal resources.
 See [DESIGN.md](DESIGN.md) and [PROTOCOL.md](PROTOCOL.md) for pipeline ownership,
 exact schemas, packet validation and resource bounds.
 
+## Low-latency playback policy
+
+The Android playback policy adapts the concepts in
+[scrcpy v3.3.4 audio buffering](https://github.com/Genymobile/scrcpy/blob/v3.3.4/doc/audio.md#buffering),
+[its audio regulator](https://github.com/Genymobile/scrcpy/blob/v3.3.4/app/src/audio_regulator.c),
+and [its latest-frame buffer](https://github.com/Genymobile/scrcpy/blob/v3.3.4/app/src/frame_buffer.c).
+No upstream C implementation is copied.
+
+- Decoded audio has a **50-ms target FIFO**, distinct from the **5-ms requested
+  device-output buffer**. Android's real minimum and whole-frame/rate headroom
+  can require a larger output; TCP capacity and SRT's effective output size are
+  validated against the existing 130-ms route ceiling and logged, not represented as 5 ms. TCP's initial 50-ms
+  preroll is the audio target, not an additional video buffer.
+  Native rate preparation may retry once at that existing ceiling if the
+  nominal minimum lacks device-specific headroom; both attempts happen before
+  playback and are logged. TCP avoids FAST tracks, which cannot prepare the
+  required pitch-preserving rate envelope on some devices.
+  AudioTrack can retain the previous speed for changes below its native
+  0.0001 deadband. Readback tolerates only that small delta, still enforces
+  the +/-2% envelope/pitch/failure mode, and uses the accepted actual speed
+  for timestamp extrapolation instead of falsely ending playback.
+- Underruns supply bounded output silence and remain recoverable. Silence never
+  increments source-audio sample/presentation counters. Delayed real audio is
+  not discarded just because an underrun occurred: only excess decoded backlog
+  is shed oldest-first (startup: **60 ms**; playing: **115 ms** at the default target).
+- Buffering is smoothed, with silence/overflow changes accounted separately.
+  Compensation is recomputed once per second over a four-second horizon,
+  bounded to **+/-2%**, and never accelerates while instantaneous FIFO occupancy
+  is below target. TCP uses validated pitch-preserving AudioTrack parameters;
+  SRT uses Media3's Sonic processing rather than adding FFmpeg/libswresample.
+- Video is presented without an audio-master wait or an added video buffer.
+  TCP replaces superseded decoded pictures; SRT releases decoded pictures to
+  the Surface's current presentation/vsync instead of waiting for audio.
+  Compressed dependencies are still decoded, never arbitrarily dropped to a keyframe.
+  SRT uses Media3's force-release hook with the real playback position; replacing
+  that position with a held frame's PTS would freeze its post-start release gate.
+  Force-release does not bypass decoded late-frame dropping during catch-up.
+  Media3's sparse-picture refresh and last-frame protection remain enabled,
+  and lateness accounts for a nonzero initial capture timestamp.
+- SRT retains Media3 demux/codec/output ownership, with shared decoded PCM
+  regulation and nominal 50--250-ms load-control settings (reduced from 100--1000 ms).
+  Pinned Media3 enforces a 500-ms minimum loading floor internally; this is
+  separate from the decoded FIFO/output bounds and is not a fixed playout delay.
+  `srt-playing` still requires actual video presentation and real source-audio
+  advancement when audio is enabled; player readiness or inserted silence is
+  not proof. Native stream/output failures stay explicit.
+  Media3's global playback/loading cursor uses its standalone monotonic clock,
+  not the source-only audio counter, so recovery silence cannot deadlock loading.
+  Source-audio advancement remains measured separately for readiness/diagnostics.
+  Future decoded audio is backpressured at the codec output beyond the 50-ms
+  scheduling horizon; decoder read-ahead is not a late burst to discard.
+  That horizon is anchored to the first real source-audio epoch, so nonzero
+  initial capture timestamps cannot block preroll on a stopped startup clock.
+  Load control excludes that empty initial timestamp interval when measuring
+  buffered media; the configured thresholds and native allocator are unchanged.
+  Occupancy is sampled on input arrival, as in scrcpy, rather than repeatedly
+  sampling an empty FIFO during output polling. Unchanged Sonic rates are not
+  reapplied, avoiding needless processor drains.
+
+`AUDIO_REGULATION` reports FIFO occupancy/target/limit, average/rate, real source
+frames, inserted silence, dropped decoded output and source recoveries.
+`AUDIO_UNDERRUN_RECOVERY` retains distinct device-underrun diagnostics.
+Encoded byte/packet/PTS limits, STOP and generation ownership are unchanged.
+Deterministic tests cover recurrent 200--250-ms delivery gaps/catch-up, bounded
+recovery, source-only counters and teardown; these are synthetic results, not
+phone latency, audible-quality or endurance measurements.
+
 ## Trust and interoperability
 
 Use a reachable **trusted private LAN**. Discovery, control and media are

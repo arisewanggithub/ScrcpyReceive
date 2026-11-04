@@ -113,11 +113,7 @@ class VideoPipelineTest {
         assertNotNull(diagnostic.delayUs)
     }
 
-    @Test fun futureClockWaitAndRealInputOutputStallsRemainBoundedAtThreeSeconds() {
-        val future = failed(FakeDecoder(block = false), ptsOffset = 5_000_000, advance = true)
-        assertEquals(VideoFault.CLOCK_WAIT, future.fault)
-        assertEquals(VideoStage.CLOCK, future.stage)
-        assertTrue(future.heldUs > 3_000_000)
+    @Test fun realInputOutputStallsRemainBoundedAtThreeSeconds() {
         val output = failed(FakeDecoder(block = false, pictures = { _, _ -> emptyList() }), advance = true)
         assertEquals(VideoFault.OUTPUT_STALL, output.fault)
         assertEquals(1L, output.queuedFrames)
@@ -126,6 +122,26 @@ class VideoPipelineTest {
         assertEquals(VideoFault.INPUT_STALL, input.fault)
         assertEquals(VideoStage.INPUT_DEQUEUE, input.stage)
         assertTrue(input.inputWaitUs > 3_000_000)
+    }
+
+    @Test fun futureDecodedPicturePresentsImmediatelyWithoutAnAudioMasterWait() {
+        val now = AtomicLong(1_000_000_000)
+        val clock = PlaybackClock(now::get).apply {
+            anchorVideo(8_000_000_000)
+            anchorAudio(8_000_000_000) { 0 }
+            audioWritten(20_000)
+        }
+        val decoder = FakeDecoder(block = false)
+        val errors = ConcurrentLinkedQueue<String>()
+        val player = VideoPlayer(format, clock, { code, detail -> errors.add("$code $detail") }, decoder)
+        try {
+            player.start()
+            player.offer(AccessUnit(8_005_000_000, byteArrayOf(1), true))
+            await { decoder.rendered.isNotEmpty() || errors.isNotEmpty() }
+            assertTrue(errors.toString(), errors.isEmpty())
+            assertEquals(1, decoder.rendered.size)
+            assertEquals(1_000_000_000L, now.get())
+        } finally { player.close() }
     }
 
     @Test fun unsupportedSelectionAndConfigurationFailuresRetainDifferentInitializationCauses() {

@@ -33,8 +33,21 @@ wire protocol version 3 control / explicit SRT SESSION_ACCEPT / actual peer and 
   -> actual video and requested-audio readiness
 ```
 
-libsrt is transport only. Media3 owns demux, decoder selection, AudioTrack,
-playback clocks and late-frame policy. Seeking, automatic reconnects and
+libsrt is transport only. Media3 owns demux, decoder selection and physical
+AudioTrack/Sonic processing. A decoded-PCM sink applies the shared 50-ms FIFO
+regulator, supplies bounded underrun silence and maps device presentation to
+real source samples only. The video renderer schedules decoded pictures
+immediately without an audio-master wait; it cannot skip compressed buffers
+to a keyframe. Late decoded pictures use Media3's normal dropping policy during
+catch-up instead of unconditional force-release. The sparse-frame refresh
+fallback still presents a late picture after a render gap; final pictures are
+not discarded. Lateness excludes the same initial capture origin used by load
+control, without changing source PTS or the real renderer position.
+Both audio-enabled and video-only streams retain readiness for an actually
+presented held picture. Draining immediate video output must not stop the
+standalone clock and strand loading behind a future picture timestamp.
+New epochs and teardown retire that proof; stream errors remain explicit.
+Seeking, automatic reconnects and
 alternate-backend retries are disabled. A present unsupported transport cannot
 select custom TCP implicitly.
 
@@ -43,8 +56,31 @@ SRT. Canonical OpusHead/dOps metadata preserves pre-skip/gain. AVC uses real
 in-band SPS/PPS at IDR; HEVC uses complete real VPS/SPS/PPS at authentic IRAP.
 The bounded bridge announces actual CSD/profile/dimensions before unchanged
 sample bytes, PTS and key flags. Default decoder adaptation/reinitialization
-retains session/audio ownership. No fake keyframes, repeated init segments or
-custom playback clock are used.
+retains session/audio ownership. No fake keyframes or repeated init segments
+are used. Source-aware audio timing excludes inserted silence, and initial
+Playing proof still requires real video and real source-audio advancement.
+That source-only counter is not exposed as Media3's master clock: its standalone
+monotonic scheduling/loading cursor must keep moving through source gaps.
+The sink still samples real audio presentation independently; clock progress
+or generated silence can never establish source readiness.
+The audio renderer supplies that scheduling position before decoding. PCM more
+than the 50-ms target ahead is held at the codec output with normal sink
+backpressure, not mistaken for late audio and discarded.
+The horizon is relative to the first real audio PTS and its renderer-clock
+origin, not absolute timestamp zero. Initial source preroll must fill while the
+Media3 clock is still stopped; a nonzero capture origin cannot block startup.
+Flush/reconfiguration retires that source epoch without rewriting source PTS.
+Load control likewise excludes the initial empty timestamp interval from its
+buffered-duration calculation. Otherwise a nonzero first PTS can stop loading
+before the native audio decoder produces any PCM. The existing loading policy
+and allocator still bound real sample duration; no encoded queue is enlarged.
+Regulation samples
+occupancy on decoded input arrival, not on repeated empty consumer polls;
+unchanged Sonic rates do not trigger processor draining.
+The custom FIFO/silence pump requests a deadline no later than 5 ms, even if
+Media3's stock audio renderer estimates it can sleep based on the larger native
+buffer. Native output timing remains separate from transport-read wait and
+loader-suspension diagnostics.
 
 AV1/audio initialization changes require a new supported session. Hardware
 decoder adaptation/rotation remains a device-validation requirement, not a
@@ -60,8 +96,8 @@ monitor waits synchronously for main-thread cleanup.
 ```text
 wire protocol version 3 listener / bounded framing / explicit stream configuration and readiness
   -> video generation queue -> MediaCodec -> Surface
-  -> audio generation queue -> Opus/AAC/PCM decode -> AudioTrack
-  -> bounded audio presentation clock / video presentation
+  -> audio generation queue -> Opus/AAC/PCM decode -> 50-ms decoded FIFO -> AudioTrack
+  -> source-only audio presentation clock / immediate latest decoded video
 ```
 
 The sender owns capture, encoders, geometry and typed options. The receiver
@@ -71,7 +107,9 @@ requested audio or cropping the received image again.
 
 libopus1.5.2 handles canonical Opus initialization, pre-skip, gain and decode.
 AAC uses supported platform decoding; PCM retains its negotiated format.
-Packet boundaries and FIFO audio payload order are preserved. Bounded framing,
+Encoded packet boundaries and FIFO audio payload order are preserved. Excess
+decoded audio can be shed oldest-first at the bounded output threshold; silence
+insertion is not an instruction to discard delayed source packets. Bounded framing,
 queues and generation checks prevent stale media from crossing session
 ownership. Missing/blocked output becomes an explicit typed failure rather
 than fabricated progress.

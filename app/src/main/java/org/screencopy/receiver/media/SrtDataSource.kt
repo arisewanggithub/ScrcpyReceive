@@ -54,10 +54,13 @@ class SrtDataSource private constructor(
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         if (length == 0) return 0
         val handle = synchronized(lock) { input ?: throw IOException("SRT input not open") }
+        val begin = System.nanoTime()
+        owner.observeReadStart(begin)
         owner.readCalls.incrementAndGet()
         val count = try { SrtNative.read(handle.get(), buffer, offset, length) }
         catch (e: IOException) { owner.failure("READ", e, handle); throw e }
         owner.completedReads.incrementAndGet()
+        owner.observeReadEnd(begin, System.nanoTime())
         if (count == -1) {
             owner.failure("EOF", IOException("SRT input EOF"), handle)
             return C.RESULT_END_OF_INPUT
@@ -93,6 +96,18 @@ class SrtDataSource private constructor(
         internal val readCalls = AtomicLong()
         internal val completedReads = AtomicLong()
         internal val receivedBytes = AtomicLong()
+        @Volatile internal var maxReadWaitUs = 0L
+            private set
+        @Volatile internal var maxReadCallGapUs = 0L
+            private set
+        private var lastReadEndNs: Long? = null
+        internal fun observeReadStart(nowNs: Long) {
+            lastReadEndNs?.let { maxReadCallGapUs = maxOf(maxReadCallGapUs, (nowNs - it) / 1000) }
+        }
+        internal fun observeReadEnd(startNs: Long, endNs: Long) {
+            maxReadWaitUs = maxOf(maxReadWaitUs, (endNs - startNs) / 1000)
+            lastReadEndNs = endNs
+        }
         private val lock = Any()
         private var closed = false
         private var diagnostics: SrtSessionDiagnostics? = null

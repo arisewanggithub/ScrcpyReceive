@@ -79,12 +79,15 @@ abstract class TrackWorker(
         try {
             halt()
         } finally {
-            if (Thread.currentThread() !== thread && thread.isAlive) {
-                thread.join(2000)
-                check(!thread.isAlive) { "Decoder did not stop within two seconds" }
+            try {
+                if (Thread.currentThread() !== thread && thread.isAlive) {
+                    thread.join(2000)
+                    check(!thread.isAlive) { "Decoder did not stop within two seconds" }
+                }
+                release()
+            } finally {
+                synchronized(monitor) { queue.clear(); budget.clear(); monitor.notifyAll() }
             }
-            release()
-            synchronized(monitor) { queue.clear(); budget.clear(); monitor.notifyAll() }
         }
     }
 }

@@ -55,12 +55,10 @@ class VideoPlayer private constructor(
     private var lastPresentationEventNs: Long? = null
     private var lastReportedSkipped = 0L
     private var lastReportedLate = 0L
-    private val schedulingHorizonUs: Long
 
     init {
         require(format.width in 1..8192 && format.height in 1..8192 && format.frameRate in 1..240 &&
             format.rotation in listOf(0, 90, 180, 270) && generation > 0) { "Invalid video output format" }
-        schedulingHorizonUs = 1_000_000L / format.frameRate
         decoder = try { factory(format) { if (running.get()) onPresented() } } catch (e: Exception) { throw failure(e) }
         stage = VideoStage.START
         try {
@@ -75,38 +73,22 @@ class VideoPlayer private constructor(
     override fun step() {
         if (heldOutput >= 0) {
             stage = VideoStage.CLOCK
-            val delay = clock.videoDelayUs(heldPtsUs)
-            delayUs = delay
-            if (delay == null || delay > schedulingHorizonUs) {
-                if (clock.monotonicNs() - heldAtNs > 3_000_000_000L)
-                    fail(VideoFault.CLOCK_WAIT)
-                // A future picture must not stop compressed input admission on the shared A/V connection.
-                Thread.sleep(2)
-            } else if (delay < -250_000) {
-                val oldBytes = outputBytes
-                val oldFlags = outputFlags
-                val newer = dequeuePicture()
+            clock.checkStartup()
+            // Only decoded pictures are replaceable; keep admitting every compressed dependency.
+            for (index in 0 until 8) {
+                val newer = dequeuePicture() ?: break
                 stage = VideoStage.OUTPUT_RELEASE
-                delayUs = delay
-                outputBytes = oldBytes
-                outputFlags = oldFlags
-                if (newer != null) {
-                    // Only decoded pictures are replaceable; compressed inputs keep their references.
-                    decoder.releaseOutput(heldOutput, null)
-                    decodedSkipped++
-                    hold(newer)
-                } else {
-                    decoder.releaseOutput(heldOutput, clock.monotonicNs())
-                    lateRendered++
-                    renderSubmitted++
-                    heldOutput = -1
-                }
-            } else {
-                stage = VideoStage.OUTPUT_RELEASE
-                decoder.releaseOutput(heldOutput, clock.monotonicNs() + delay.coerceAtLeast(0) * 1000)
-                renderSubmitted++
-                heldOutput = -1
+                decoder.releaseOutput(heldOutput, null)
+                decodedSkipped++
+                hold(newer)
             }
+            stage = VideoStage.CLOCK
+            delayUs = clock.delayUs(heldPtsUs)
+            if (delayUs?.let { it < -250_000 } == true) lateRendered++
+            stage = VideoStage.OUTPUT_RELEASE
+            decoder.releaseOutput(heldOutput, clock.monotonicNs())
+            renderSubmitted++
+            heldOutput = -1
             reportPresentation()
         }
         if (waiting == null) {

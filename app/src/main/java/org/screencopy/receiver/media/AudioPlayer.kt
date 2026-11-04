@@ -15,7 +15,8 @@ class AudioPlayer(
     private val onClockCorrection: (AudioClockCorrection) -> Unit = {},
     private val onOutputTiming: (AudioOutputTiming) -> Unit = {},
     private val onUnderrunRecovery: (AudioUnderrunDiagnostic) -> Unit = {},
-    opusFactory: (AudioFormat) -> OpusPacketDecoder = { OpusDecoder(it.channels, it.outputGainQ8) }
+    opusFactory: (AudioFormat) -> OpusPacketDecoder = { OpusDecoder(it.channels, it.outputGainQ8) },
+    private val onRegulation: (AudioRegulationDiagnostic) -> Unit = {}
 ) : TrackWorker("ScreenCopy-audio", 512 * 1024, { code, detail -> failure(if (code == "DECODER_FAILED") "AUDIO_FAILED" else code, detail) }, track = 2) {
     private val output: AudioOutput
     private val opus: OpusPacketDecoder?
@@ -24,11 +25,19 @@ class AudioPlayer(
     private var waiting: AccessUnit? = null
     private var pending: DecodedAudio? = null
     private val startup = StartupTrim(format.preSkip, format.sampleRate)
-    private var totalFrames = 0L
+    @Volatile private var totalFrames = 0L
+    internal val sourceSubmittedFrames: Long get() = totalFrames
+    internal fun sourcePositionUs(): Long = presentation.presentedUs { output.timing().presentedFrames }
     @Volatile private var firstPtsUs: Long? = null
     private val underruns = AudioUnderrunMonitor()
     private var lastUnderrunObservationNs: Long? = null
-    private var lastCorrectionNs = 0L
+    private val regulator = AudioRegulator(format.sampleRate, format.channels)
+    private val presentation = AudioPresentationTimeline(format.sampleRate)
+    private val outputBlockFrames = maxOf(1, format.sampleRate * 5 / 1000)
+    private val silence = ShortArray(outputBlockFrames * format.channels)
+    private var deviceFrames = 0L
+    private var lastOutputProgressNs = 0L
+    private var lastConsumedFrames = 0L
     private var stage = "STARTUP_CHECK"
     private var lastClockEventNs: Long? = null
     private var lastLoggedOffsetUs = 0L
@@ -63,7 +72,6 @@ class AudioPlayer(
         clock.checkStartup()
         if (pending != null && clock.canPrepareAudio()) {
             flushPending()
-            return
         }
         if (format.codec == "aac") stepAac()
         else next()?.let { packet ->
@@ -71,6 +79,7 @@ class AudioPlayer(
             val samples = opus?.decode(packet.bytes) ?: pcm16(packet.bytes)
             write(samples, packet.ptsUs)
         }
+        pumpOutput()
         observeUnderruns()
     }
 
@@ -129,7 +138,7 @@ class AudioPlayer(
             // Until the first video packet, retain only the latest decoded preroll packet.
             pending = DecodedAudio(samples, slice)
             flushPending()
-        } else writePcm(samples, slice)
+        } else regulator.offer(samples, slice)
     }
 
     private fun flushPending() {
@@ -146,16 +155,77 @@ class AudioPlayer(
     }
 
     private fun writePcm(samples: ShortArray, slice: TrimmedAudio) {
-        val trim = slice.skipFrames
-        val frames = slice.frames
-        if (frames == 0) return
+        if (slice.frames == 0) return
         val audiblePtsUs = slice.audiblePtsUs
         val starting = firstPtsUs == null
         if (starting) {
             stage = "OUTPUT_START"
             firstPtsUs = audiblePtsUs
-            clock.anchorAudio(audiblePtsUs, format.sampleRate, output::positionUs)
+            clock.anchorAudio(audiblePtsUs, format.sampleRate) {
+                sourcePositionUs()
+            }
         }
+        stage = "SOURCE_MAP"
+        regulator.offer(samples, slice)
+        if (starting) {
+            stage = "OUTPUT_START"
+            regulator.startAfterPreroll()
+            output.play()
+            lastOutputProgressNs = clock.monotonicNs()
+            underruns.start(output.underrunCount)
+        }
+    }
+
+    private fun pumpOutput() {
+        if (firstPtsUs == null || !running.get()) return
+        stage = "OUTPUT_CLOCK"
+        val timing = output.timing()
+        if (timing.submittedFrames != deviceFrames)
+            throw AudioClockException(AudioClockDiagnostic(AudioClockFault.SUBMISSION, timing))
+        if (timing.submittedFrames - timing.consumedFrames !in 0..timing.bufferFrames.toLong())
+            throw AudioClockException(AudioClockDiagnostic(AudioClockFault.CLIENT_BUFFER, timing))
+        val now = clock.monotonicNs()
+        if (timing.consumedFrames > lastConsumedFrames) lastOutputProgressNs = now
+        lastConsumedFrames = timing.consumedFrames
+        val available = (timing.bufferFrames - (timing.submittedFrames - timing.consumedFrames)).toInt()
+        val chunk = regulator.peek(outputBlockFrames)
+        val frames = minOf(available, chunk?.frames ?: outputBlockFrames)
+        // Do not prefill the entire route with silence during a delivery gap.
+        val needsSilence = chunk == null && timing.submittedFrames - timing.consumedFrames < outputBlockFrames
+        if (frames > 0 && (chunk != null || needsSilence)) {
+            stage = "OUTPUT_WRITE"
+            val written = presentation.write(chunk != null, format.channels, frames) {
+                output.write(chunk?.samples ?: silence, chunk?.offset ?: 0, frames * format.channels)
+            }
+            if (written > 0) {
+                val accepted = written / format.channels
+                if (chunk != null) {
+                    sourcePacket(chunk.ptsUs)
+                    regulator.consumed(accepted)
+                    totalFrames += accepted
+                    clock.audioWritten(totalFrames * 1_000_000L / format.sampleRate)
+                } else regulator.insertedSilence(accepted)
+                deviceFrames += accepted
+                lastOutputProgressNs = clock.monotonicNs()
+            }
+        }
+        val finished = clock.monotonicNs()
+        if (finished - lastOutputProgressNs > 250_000_000L && (chunk != null || needsSilence)) {
+            stage = "OUTPUT_WRITE"
+            throw PlaybackException("Audio output stalled for 250 ms without observed write progress;" +
+                " event=WRITE_STALL recent_progress_ms=${(finished - lastOutputProgressNs) / 1_000_000}" +
+                " queued_decoded_frames=${regulator.bufferedFrames} source_frames=$totalFrames device_frames=$deviceFrames" +
+                " playing_state=${output.playbackActive} ${timing.logMessage()}", "AUDIO_FAILED")
+        }
+        regulator.correction(finished)?.let {
+            stage = "RATE_CORRECTION"
+            onOutputTiming(timing)
+            output.setSpeed(it)
+            onRegulation(regulator.diagnostic())
+        }
+    }
+
+    private fun sourcePacket(audiblePtsUs: Long) {
         stage = "SOURCE_MAP"
         val correction = clock.audioPacket(totalFrames * 1_000_000L / format.sampleRate, audiblePtsUs)
         if (correction != null) pendingClockCorrection = correction
@@ -168,65 +238,6 @@ class AudioPlayer(
                 lastLoggedOffsetUs = it.afterOffsetUs
                 pendingClockCorrection = null
             }
-        }
-        if (starting) {
-            stage = "OUTPUT_START"
-            output.play()
-            underruns.start(output.underrunCount)
-        }
-        var offset = trim * format.channels
-        val initialOffset = offset
-        val end = offset + frames * format.channels
-        val started = clock.monotonicNs()
-        var lastProgress = started
-        var zeroWrites = 0
-        while (running.get() && offset < end) {
-            stage = "OUTPUT_WRITE"
-            val writeStarted = clock.monotonicNs()
-            val written = output.write(samples, offset, end - offset)
-            val now = clock.monotonicNs()
-            check(written >= 0) { "AudioTrack write failed ($written)" }
-            if (written == 0) {
-                zeroWrites++
-                if (now - lastProgress > 250_000_000L) {
-                    throw PlaybackException("Audio output stalled for 250 ms without observed write progress;" +
-                        " event=WRITE_STALL recent_progress_ms=${(now - lastProgress) / 1_000_000}" +
-                        " packet_elapsed_ms=${(now - started) / 1_000_000}" +
-                        " remaining_samples=${end - offset} written_samples=${offset - initialOffset}" +
-                        " write_call_ms=${(now - writeStarted) / 1_000_000} zero_writes=$zeroWrites" +
-                        " playing_state=${output.playbackActive} ${output.timing().logMessage()}")
-                }
-                Thread.sleep(2)
-            } else {
-                check(written <= end - offset && written % format.channels == 0) { "AudioTrack returned an invalid sample count" }
-                // Bound continuous lack of progress, not the age of a partially accepted packet.
-                lastProgress = now
-                zeroWrites = 0
-                offset += written
-                totalFrames += written / format.channels
-                clock.audioWritten(totalFrames * 1_000_000L / format.sampleRate)
-            }
-        }
-        observeUnderruns()
-
-        // Regulate actual buffered PCM, not capture-clock phase corrections.
-        val now = clock.monotonicNs()
-        if (now - lastCorrectionNs > 1_000_000_000L && totalFrames > format.sampleRate) {
-            stage = "RATE_CORRECTION"
-            val timing = output.timing()
-            if (timing.submittedFrames != totalFrames)
-                throw AudioClockException(AudioClockDiagnostic(AudioClockFault.SUBMISSION, timing))
-            if (timing.submittedFrames - timing.consumedFrames !in 0..timing.bufferFrames.toLong())
-                throw AudioClockException(AudioClockDiagnostic(AudioClockFault.CLIENT_BUFFER, timing))
-            onOutputTiming(timing)
-            val leadUs = timing.bufferedUs
-            val speed = when {
-                leadUs > 100_000 -> AudioOutputPreparation.MAX_SPEED
-                leadUs < 40_000 -> AudioOutputPreparation.MIN_SPEED
-                else -> AudioOutputPreparation.NOMINAL_SPEED
-            }
-            output.setSpeed(speed)
-            lastCorrectionNs = now
         }
     }
 
@@ -252,7 +263,12 @@ class AudioPlayer(
             try {
                 aac?.let { try { it.stop() } finally { it.release() } }
             } finally {
-                try { opus?.close() } finally { pending = null; output.close() }
+                try { opus?.close() } finally {
+                    pending = null
+                    regulator.clear()
+                    presentation.clear()
+                    output.close()
+                }
             }
         }
     }
