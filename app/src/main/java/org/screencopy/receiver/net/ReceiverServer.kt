@@ -54,7 +54,8 @@ class ReceiverServer private constructor(
     private val videoFactory: ((VideoFormat, PlaybackClock, (String, String) -> Unit, Long) -> VideoPlayer)?,
     private val audioFactory: ((AudioFormat, PlaybackClock, (String, String) -> Unit) -> AudioPlayer)? = null,
     private val clockFactory: () -> PlaybackClock = ::PlaybackClock,
-    private val onDiscoveryDiagnostic: (String) -> Unit = {}
+    private val onDiscoveryDiagnostic: (String) -> Unit = {},
+    private val onVideoRotation: (Int, () -> Boolean) -> Unit = { _, _ -> }
 ) : AutoCloseable {
     constructor(
         name: String, surface: Surface,
@@ -65,10 +66,11 @@ class ReceiverServer private constructor(
         onPresentationStart: (ReceiverOrientation) -> AutoCloseable = {
             if (it != ReceiverOrientation.AUTO) throw ReceiverOrientationException()
             AutoCloseable {}
-        }
+        },
+        onVideoRotation: (Int, () -> Boolean) -> Unit = { _, _ -> }
     ) : this(name, surface, onStatus, onVideoSize, onListener, port, videoOutput, ::validateCapabilities, onScreenEvent,
         { android.util.Log.e("ScreenCopyReceiver", it.logMessage()) }, onPresentationStart, null,
-        onDiscoveryDiagnostic = { android.util.Log.i("ScreenCopyReceiver", it) })
+        onDiscoveryDiagnostic = { android.util.Log.i("ScreenCopyReceiver", it) }, onVideoRotation = onVideoRotation)
 
     private val name = name.take(80)
     private val running = AtomicBoolean(false)
@@ -251,6 +253,7 @@ class ReceiverServer private constructor(
         private val framePresented = AtomicBoolean(false)
         @Volatile private var tracksReady = false
         @Volatile private var videoGeneration = 0L
+        private var videoRotation = false
 
         fun run() {
             try {
@@ -269,8 +272,11 @@ class ReceiverServer private constructor(
                 protocolRequire((0 until versions.length()).any { versions.opt(it) == Wire.VERSION }, "No compatible protocol version", "VERSION")
                 senderName = h.string("name", 80)
                 protocolRequire(senderName.isNotEmpty(), "Sender name is empty")
-                send(Type.HELLO, JSONObject().put("role", "receiver").put("versions", JSONArray().put(Wire.VERSION))
-                    .put("name", name))
+                protocolRequire(!h.has("videoRotation") || h.opt("videoRotation") is Boolean, "videoRotation must be boolean")
+                videoRotation = h.opt("videoRotation") == true
+                val response = JSONObject().put("role", "receiver").put("versions", JSONArray().put(Wire.VERSION)).put("name", name)
+                if (videoRotation) response.put("videoRotation", true)
+                send(Type.HELLO, response)
                 phase = "Negotiating"
                 phaseAt = now()
                 val negotiation = readControlUntilRequest()
@@ -306,8 +312,10 @@ class ReceiverServer private constructor(
                             configure(message)
                         }
                         Type.VIDEO_FRAME, Type.AUDIO_PACKET -> synchronized(playbackLock) {
+                            protocolRequire(videoRotation || message.flags <= 1, "Video rotation was not negotiated")
                             checkNotNull(tracks).media(message)
-                            val packet = AccessUnit(message.ptsUs, message.payload, message.flags == 1)
+                            val packet = AccessUnit(message.ptsUs, message.payload, message.flags and 1 != 0,
+                                (message.flags ushr 1) * 90)
                             if (message.type == Type.VIDEO_FRAME) {
                                 clock.anchorVideo(packet.ptsUs)
                                 if (settings.videoCodec != "av1") protocolRequire(Configuration.annexB(message.payload), "Expected Annex B video access unit")
@@ -442,7 +450,11 @@ class ReceiverServer private constructor(
                             framePresented.compareAndSet(false, true)) {
                             onScreenEvent(ReceiverScreenEvent.FramePresented)
                         }
-                    }, generation = message.generation)).also { it.start() }
+                    }, generation = message.generation, onRotation = { rotation ->
+                        val current = { running.get() && !stopping.get() && active.get() === this &&
+                            videoGeneration == message.generation }
+                        if (videoRotation && current()) onVideoRotation(rotation, current)
+                    })).also { it.start() }
                 }
                 onVideoSize(format.width, format.height)
             } else {
@@ -567,9 +579,10 @@ class ReceiverServer private constructor(
             videoFactory: ((VideoFormat, PlaybackClock, (String, String) -> Unit, Long) -> VideoPlayer)? = null,
             audioFactory: ((AudioFormat, PlaybackClock, (String, String) -> Unit) -> AudioPlayer)? = null,
             clockFactory: () -> PlaybackClock = ::PlaybackClock,
-            onVideoSize: (Int, Int) -> Unit = { _, _ -> }) =
+            onVideoSize: (Int, Int) -> Unit = { _, _ -> },
+            onVideoRotation: (Int, () -> Boolean) -> Unit = { _, _ -> }) =
             ReceiverServer(name, null, onStatus, onVideoSize, onListener, port, ResourceSlot(), validateRequest, onScreenEvent,
-                onFailure, onPresentationStart, videoFactory, audioFactory, clockFactory)
+                onFailure, onPresentationStart, videoFactory, audioFactory, clockFactory, onVideoRotation = onVideoRotation)
 
         private fun validateCapabilities(settings: Request) {
             val types = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { !it.isEncoder }.flatMap { it.supportedTypes.toList() }

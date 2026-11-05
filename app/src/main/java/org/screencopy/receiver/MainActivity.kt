@@ -2,12 +2,12 @@ package org.screencopy.receiver
 
 import android.app.Activity
 import android.content.res.Configuration
+import android.graphics.SurfaceTexture
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.view.Gravity
-import android.view.SurfaceHolder
-import android.view.SurfaceView
+import android.view.Surface
+import android.view.TextureView
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
@@ -18,6 +18,7 @@ import org.screencopy.receiver.lifecycle.ResourceSlot
 import org.screencopy.receiver.media.VideoPlayer
 import org.screencopy.receiver.net.ReceiverServer
 import org.screencopy.receiver.ui.ReceiverLayout
+import org.screencopy.receiver.ui.VideoPresentation
 import org.screencopy.receiver.ui.ReceiverScreen
 import org.screencopy.receiver.ui.ReceiverScreenEvent
 import org.screencopy.receiver.ui.ReceiverScreenView
@@ -30,7 +31,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
-class MainActivity : Activity(), SurfaceHolder.Callback {
+class MainActivity : Activity(), TextureView.SurfaceTextureListener {
     private lateinit var updates: dev.scrcpy.update.UpdateUi
     internal var updateUiFactoryForTests: ((Activity, () -> Boolean) -> dev.scrcpy.update.UpdateUi)? = null
         set(value) {
@@ -42,7 +43,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var screenView: ReceiverScreenView
     private lateinit var root: FrameLayout
     private lateinit var videoBox: FrameLayout
-    private lateinit var surface: SurfaceView
+    private lateinit var surface: TextureView
+    @Volatile private var decoderSurface: Surface? = null
     private var screen = ReceiverScreen()
     @Volatile private var server: ReceiverServer? = null
     internal val receiverReadyForTests: Boolean get() = server != null
@@ -51,6 +53,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     @Volatile private var exiting = false
     private var surfaceReady = false
     private var aspect = 16.0 / 9
+    private var videoRotation = 0
+    private var hasVideoRotation = false
     private val sessionOrientation = SessionOrientation({ requestedOrientation }, { requestedOrientation = it })
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -82,7 +86,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             castActive, downloadInBrowser = true)
         updates.restoreState(savedInstanceState?.getBundle("app_update_ui"))
         bindHome()
-        surface.holder.addCallback(this)
+        surface.surfaceTextureListener = this
         root.setOnApplyWindowInsetsListener { view, insets ->
             if (android.os.Build.VERSION.SDK_INT >= 30) {
                 val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
@@ -122,7 +126,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun onDestroy() {
-        surface.holder.removeCallback(this)
+        surface.surfaceTextureListener = null
+        decoderSurface?.release()
+        decoderSurface = null
         main.removeCallbacksAndMessages(null)
         super.onDestroy()
     }
@@ -160,37 +166,46 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         root.requestApplyInsets()
     }
 
-    override fun surfaceCreated(holder: SurfaceHolder) {
+    override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
+        if (exiting || isFinishing || isDestroyed) return
+        check(decoderSurface == null) { "Video texture replaced before its previous Surface was retired" }
+        decoderSurface = Surface(texture)
         surfaceReady = true
         android.util.Log.i("ScreenCopyReceiver", "event=RECEIVER_SURFACE_CREATED active=$active")
         startReceiver()
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
+    override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) = Unit
+    override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
 
-    override fun surfaceDestroyed(holder: SurfaceHolder) {
+    override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
         surfaceReady = false
         android.util.Log.i("ScreenCopyReceiver", "event=RECEIVER_SURFACE_DESTROYED active=$active")
         dispatch(ReceiverScreenEvent.ListenerStopped)
         retireVideoOutput()
         worker.execute { stopReceiver() }
+        decoderSurface?.release()
+        decoderSurface = null
+        return true
     }
 
     private fun startReceiver() {
         if (!active || exiting || isFinishing || !surfaceReady) return
         val output = videoOutput ?: ResourceSlot<VideoPlayer>().also { videoOutput = it }
         worker.execute {
-            if (!active || exiting || output.isClosed || !surface.holder.surface.isValid || server != null) return@execute
+            val target = decoderSurface
+            if (!active || exiting || output.isClosed || target?.isValid != true || server != null) return@execute
             try {
                 server = ReceiverServer(
-                    ReceiverServer.DEFAULT_NAME, surface.holder.surface,
+                    ReceiverServer.DEFAULT_NAME, target,
                     onStatus = { _, _ -> }, onListener = {},
                     onVideoSize = { width, height ->
-                        ui(output) { aspect = width.toDouble() / height; fitVideo() }
+                        ui(output) { aspect = width.toDouble() / height; videoRotation = 0; hasVideoRotation = false; fitVideo() }
                     },
                     videoOutput = output,
                     onScreenEvent = { event -> ui(output) { dispatch(event) } },
-                    onPresentationStart = { mode -> beginPresentation(mode, output) }
+                    onPresentationStart = { mode -> beginPresentation(mode, output) },
+                    onVideoRotation = { rotation, current -> ui(output) { if (current()) rotateVideo(rotation) } }
                 ).also { it.start() }
             } catch (e: Exception) {
                 android.util.Log.e("ScreenCopyReceiver", "event=RECEIVER_START_FAILED exception=${e.javaClass.simpleName}")
@@ -238,9 +253,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val apply = Runnable {
             try {
                 if (cancelled.get() || !active || exiting || isDestroyed || isFinishing ||
-                    expected == null || videoOutput !== expected || expected.isClosed || !surfaceReady || !surface.holder.surface.isValid)
+                    expected == null || videoOutput !== expected || expected.isClosed || !surfaceReady || decoderSurface?.isValid != true)
                     throw ReceiverOrientationException()
                 sessionOrientation.begin(owner, mode)
+                if (hasVideoRotation) sessionOrientation.followVideo(aspect, videoRotation)
                 if (cancelled.get()) restoreOrientation(owner)
             } catch (e: RuntimeException) {
                 restoreOrientation(owner)
@@ -326,14 +342,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             content.setPadding(horizontal, vertical, horizontal, vertical)
     }
 
+    internal fun rotateVideo(degrees: Int) {
+        require(degrees in listOf(0, 90, 180, 270))
+        videoRotation = degrees
+        hasVideoRotation = true
+        sessionOrientation.followVideo(aspect, degrees)
+        fitVideo()
+        android.util.Log.i("ScreenCopyReceiver", "event=VIDEO_PRESENTATION_ROTATION rotation=$degrees")
+    }
+
     private fun fitVideo() {
-        val width = videoBox.width
-        val height = videoBox.height
-        if (width <= 0 || height <= 0) return
-        val targetWidth = minOf(width, (height * aspect).toInt())
-        val targetHeight = minOf(height, (width / aspect).toInt())
-        if (surface.layoutParams.width != targetWidth || surface.layoutParams.height != targetHeight)
-            surface.layoutParams = FrameLayout.LayoutParams(targetWidth, targetHeight, Gravity.CENTER)
+        VideoPresentation.fit(surface, videoBox, aspect, videoRotation)
     }
 
     private fun ui(output: ResourceSlot<VideoPlayer>, action: () -> Unit) {

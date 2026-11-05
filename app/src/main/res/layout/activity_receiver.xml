@@ -7,7 +7,7 @@
         android:id="@+id/video_box"
         android:layout_width="match_parent"
         android:layout_height="match_parent">
-        <SurfaceView
+        <TextureView
             android:id="@+id/video_surface"
             android:layout_width="match_parent"
             android:layout_height="match_parent"

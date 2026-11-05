@@ -14,7 +14,7 @@ class ReceiverLayoutTest {
 
     @Test fun surfaceStaysFullSizeUnderAnIndependentOpaqueWaitingOverlay() {
         val elements = xml("res/layout/activity_receiver.xml").getElementsByTagName("*")
-        val surface = (0 until elements.length).map { elements.item(it) as Element }.single { it.tagName == "SurfaceView" }
+        val surface = (0 until elements.length).map { elements.item(it) as Element }.single { it.tagName == "TextureView" }
         assertEquals("match_parent", surface.getAttributeNS(android, "layout_width"))
         assertEquals("match_parent", surface.getAttributeNS(android, "layout_height"))
         assertFalse(surface.hasAttributeNS(android, "visibility"))

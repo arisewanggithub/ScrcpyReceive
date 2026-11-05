@@ -6,7 +6,7 @@ import android.content.Intent
 import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.MotionEvent
-import android.view.SurfaceView
+import android.view.TextureView
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
@@ -77,7 +77,7 @@ class ReceiverMainActivityUpdateEntryTest {
         }
         lifecycle.create()
         // Keep the real activity lifecycle and layout, but leave its video surface unavailable.
-        activity.findViewById<SurfaceView>(R.id.video_surface).holder.removeCallback(activity)
+        activity.findViewById<TextureView>(R.id.video_surface).surfaceTextureListener = null
         lifecycle.start().resume().visible()
         ShadowLooper.idleMainLooper()
         assertFalse(activity.receiverReadyForTests)

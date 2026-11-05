@@ -1,7 +1,7 @@
 package org.screencopy.receiver
 
 import android.content.res.Configuration
-import android.view.SurfaceView
+import android.view.TextureView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -23,12 +23,78 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 @RunWith(AndroidJUnit4::class)
 class ReceiverOrientationLifecycleTest {
+    @Test fun automaticVideoAxisUsesLandscapeWindowAndPreservesTextureAndTransport() {
+        requireVisibleDevice()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitSurface(scenario)
+            lateinit var activity: MainActivity
+            lateinit var texture: android.graphics.SurfaceTexture
+            var originalPolicy = 0
+            lateinit var lease: AutoCloseable
+            scenario.onActivity {
+                activity = it
+                texture = checkNotNull(it.findViewById<TextureView>(R.id.video_surface).surfaceTexture)
+                originalPolicy = it.requestedOrientation
+                lease = it.beginPresentation(ReceiverOrientation.AUTO)
+                // The initial waiting aspect is landscape; preserve that axis at rotation zero.
+                it.rotateVideo(0)
+                assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE, it.requestedOrientation)
+            }
+            val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            val landscape = AtomicBoolean()
+            while (!landscape.get() && System.nanoTime() < until) {
+                scenario.onActivity { landscape.set(it.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) }
+                if (!landscape.get()) Thread.sleep(10)
+            }
+            assertTrue("Automatic video must use a real landscape Activity window", landscape.get())
+            awaitSurface(scenario)
+            scenario.onActivity {
+                assertSame(activity, it)
+                assertSame(texture, it.findViewById<TextureView>(R.id.video_surface).surfaceTexture)
+            }
+            lease.close()
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            scenario.onActivity { assertEquals(originalPolicy, it.requestedOrientation) }
+        }
+        ReceiverWork.executor.submit {}.get(5, TimeUnit.SECONDS)
+    }
+
+    @Test fun videoPresentationRotatesWithoutReplacingTheActivityOrDecoderSurface() {
+        requireVisibleDevice()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitSurface(scenario)
+            lateinit var original: TextureView
+            lateinit var texture: android.graphics.SurfaceTexture
+            lateinit var activity: MainActivity
+            scenario.onActivity {
+                activity = it; original = it.findViewById(R.id.video_surface)
+                texture = checkNotNull(original.surfaceTexture)
+            }
+            for (rotation in listOf(0, 90, 180, 270, 0)) {
+                scenario.onActivity { it.rotateVideo(rotation) }
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                scenario.onActivity {
+                    assertSame(activity, it)
+                    assertSame(original, it.findViewById(R.id.video_surface))
+                    assertTrue(original.isAvailable)
+                    assertSame(texture, original.surfaceTexture)
+                    assertEquals(rotation.toFloat(), original.rotation, 0f)
+                    val box = it.findViewById<android.view.View>(R.id.video_box)
+                    val width = if (rotation % 180 == 0) original.width else original.height
+                    val height = if (rotation % 180 == 0) original.height else original.width
+                    assertTrue(width <= box.width && height <= box.height)
+                }
+            }
+        }
+        ReceiverWork.executor.submit {}.get(5, TimeUnit.SECONDS)
+    }
+
     @Test fun presentationAndConfigurationKeepTheActivitySurfaceAndAcceptedTransport() {
         requireVisibleDevice()
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             awaitSurface(scenario)
             lateinit var originalActivity: MainActivity
-            lateinit var originalSurface: SurfaceView
+            lateinit var originalSurface: TextureView
             var originalPolicy = 0
             scenario.onActivity {
                 originalActivity = it
@@ -111,7 +177,7 @@ class ReceiverOrientationLifecycleTest {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
         while (!ready.get() && System.nanoTime() < deadline) {
             scenario.onActivity {
-                ready.set(it.findViewById<SurfaceView>(R.id.video_surface).holder.surface.isValid)
+                ready.set(it.findViewById<TextureView>(R.id.video_surface).isAvailable)
             }
             if (!ready.get()) Thread.sleep(10)
         }

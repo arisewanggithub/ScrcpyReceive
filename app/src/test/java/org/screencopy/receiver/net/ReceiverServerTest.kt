@@ -22,6 +22,43 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class ReceiverServerTest {
+    @Test fun nonzeroRotationBitsAreRejectedWithoutNegotiationBeforeTrackAdmission() {
+        ReceiverServer.forProtocolTests("Receiver").use { server ->
+            server.start()
+            connect(server).use { peer ->
+                hello(peer)
+                send(peer, Type.SESSION_REQUEST, settings(), 77)
+                assertEquals(Type.SESSION_ACCEPT, read(peer).type)
+                Wire.write(peer.outputStream, Message(Type.VIDEO_FRAME, 77, 1, 1, 1_000_000, 3,
+                    byteArrayOf(0, 0, 0, 1, 0x65)))
+                val error = read(peer)
+                assertEquals(Type.ERROR, error.type)
+                assertEquals("PROTOCOL", error.json().string("code"))
+                assertEquals("Video rotation was not negotiated", error.json().string("message"))
+            }
+        }
+    }
+
+    @Test fun rotationCapabilityIsOptInAndMalformedRequestsFailBeforeNegotiation() {
+        ReceiverServer.forProtocolTests("Receiver").use { server ->
+            server.start()
+            for (capability in listOf(false, true, "true", JSONObject.NULL)) {
+                connect(server).use { peer ->
+                    send(peer, Type.HELLO, JSONObject().put("role", "sender").put("versions", JSONArray().put(3))
+                        .put("name", "Phone").put("videoRotation", capability))
+                    val response = read(peer)
+                    if (capability is Boolean) {
+                        assertEquals(Type.HELLO, response.type)
+                        assertEquals(capability, response.json().opt("videoRotation") == true)
+                    } else {
+                        assertEquals(Type.ERROR, response.type)
+                        assertEquals("PROTOCOL", response.json().getString("code"))
+                    }
+                }
+            }
+        }
+    }
+
     @Test fun externalTransportDescriptorsAreRejectedBeforeAcceptanceAndCannotFallBackToTcp() {
         val validated = AtomicInteger()
         ReceiverServer.forProtocolTests("Receiver", validateRequest = { validated.incrementAndGet() }).use { server ->

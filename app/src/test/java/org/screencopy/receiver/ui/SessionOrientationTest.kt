@@ -6,6 +6,53 @@ import org.junit.Test
 import org.screencopy.receiver.protocol.ReceiverOrientation
 
 class SessionOrientationTest {
+    @Test fun negotiatedAutomaticVideoFollowsDisplayedAspectAndRestoresOriginalPolicy() {
+        val device = Device(ActivityInfo.SCREEN_ORIENTATION_USER)
+        val policy = device.policy()
+        val owner = Any()
+        policy.begin(owner, ReceiverOrientation.AUTO)
+        policy.followVideo(1080.0 / 1920, 90)
+        assertEquals(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE, device.current)
+        repeat(5) { policy.followVideo(1080.0 / 1920, 270) }
+        assertEquals(1, device.writes.size)
+        policy.followVideo(1080.0 / 1920, 0)
+        assertEquals(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT, device.current)
+        policy.restore(owner)
+        assertEquals(ActivityInfo.SCREEN_ORIENTATION_USER, device.current)
+        policy.followVideo(1080.0 / 1920, 90)
+        assertEquals(3, device.writes.size)
+    }
+
+    @Test fun forcedReceiverAxisWinsOverVideoAndStaleCleanupCannotResetAutomaticVideoAxis() {
+        val device = Device(ActivityInfo.SCREEN_ORIENTATION_USER)
+        val policy = device.policy()
+        val old = Any()
+        policy.begin(old, ReceiverOrientation.PORTRAIT)
+        policy.followVideo(0.5625, 90)
+        assertEquals(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT, device.current)
+        val owner = Any()
+        policy.begin(owner, ReceiverOrientation.AUTO)
+        policy.followVideo(0.5625, 90)
+        policy.restore(old)
+        assertEquals(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE, device.current)
+        policy.restore(owner)
+        assertEquals(ActivityInfo.SCREEN_ORIENTATION_USER, device.current)
+    }
+
+    @Test fun ignoredAutomaticVideoAxisRequestsAreNotRepeatedAndSquareVideoKeepsPolicy() {
+        var calls = 0
+        val policy = SessionOrientation({ ActivityInfo.SCREEN_ORIENTATION_USER }, { calls++ })
+        policy.begin(Any(), ReceiverOrientation.AUTO)
+        policy.followVideo(1.0, 90)
+        assertEquals(0, calls)
+        repeat(5) { policy.followVideo(0.5625, 90) }
+        assertEquals(1, calls)
+        policy.followVideo(0.5625, 0)
+        assertEquals(2, calls)
+        assertThrows(IllegalArgumentException::class.java) { policy.followVideo(Double.NaN, 0) }
+        assertThrows(IllegalArgumentException::class.java) { policy.followVideo(1.0, 45) }
+    }
+
     @Test fun autoLeavesExistingSensorPolicyUntouched() {
         val device = Device(ActivityInfo.SCREEN_ORIENTATION_USER)
         val policy = device.policy()

@@ -12,6 +12,27 @@ import java.util.concurrent.atomic.AtomicInteger
 class VideoPipelineTest {
     private val format = VideoFormat("video/avc", 640, 360, listOf(byteArrayOf(1)), 50)
 
+    @Test fun presentationRotationChangesWithoutReplacingTheDecoderOrCompressedStream() {
+        val decoder = FakeDecoder(block = false)
+        val clock = PlaybackClock()
+        val errors = ConcurrentLinkedQueue<String>()
+        val rotations = ConcurrentLinkedQueue<Int>()
+        val player = VideoPlayer(format, clock, { code, detail -> errors.add("$code: $detail") }, decoder,
+            onRotation = rotations::add)
+        try {
+            player.start()
+            for ((index, rotation) in listOf(0, 90, 180, 270, 0).withIndex()) {
+                player.offer(AccessUnit(8_000_000_000 + index * 20_000L, byteArrayOf(1), index == 0, rotation))
+                await { rotations.size > index || errors.isNotEmpty() }
+            }
+            assertTrue(errors.toString(), errors.isEmpty())
+            assertEquals(listOf(0, 90, 180, 270, 0), rotations.toList())
+            assertEquals(5, decoder.inputs.size)
+            assertFalse(decoder.closed)
+        } finally { player.close() }
+        assertTrue(decoder.closed)
+    }
+
     @Test fun anIsolatedDecodedFrameDelayedBySchedulingStillPresentsWithoutCancellingCast() {
         val now = AtomicLong(1_000_000_000)
         val clock = PlaybackClock(now::get).apply { anchorVideo(8_000_000_000) }
