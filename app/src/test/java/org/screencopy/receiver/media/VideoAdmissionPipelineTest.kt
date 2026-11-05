@@ -16,6 +16,58 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 class VideoAdmissionPipelineTest {
+    @Test fun negotiatedRotationCrossesRealTcpAndChangesPresentationWithoutANewDecoderGeneration() {
+        val errors = ConcurrentLinkedQueue<String>()
+        val rotations = ConcurrentLinkedQueue<Int>()
+        val decoders = mutableListOf<BoundedDecoder>()
+        val sizes = AtomicInteger()
+        ReceiverServer.forProtocolTests("Receiver", onFailure = { errors.add(it.logMessage()) },
+            onVideoSize = { width, height -> assertEquals(1080, width); assertEquals(1920, height); sizes.incrementAndGet() },
+            videoFactory = { format, clock, failed, generation ->
+                assertEquals(1L, generation)
+                val decoder = BoundedDecoder(System::nanoTime).also(decoders::add)
+                VideoPlayer(format, clock, failed, decoder, generation, onRotation = rotations::add)
+            }).use { server ->
+            server.start()
+            Socket(InetAddress.getLoopbackAddress(), server.listeningPort).use { peer ->
+                peer.soTimeout = 4000
+                fun control(type: Type, json: JSONObject, track: Int = 0, generation: Long = 0) =
+                    Wire.write(peer.outputStream, Message.json(type, json, if (type == Type.HELLO) 0 else 41, track, generation))
+                fun expect(type: Type): Message {
+                    val response = Wire.read(peer.inputStream)
+                    assertEquals("Unexpected peer reply: ${response.type}; $errors", type, response.type)
+                    return response
+                }
+                control(Type.HELLO, JSONObject().put("role", "sender").put("versions", JSONArray().put(3))
+                    .put("name", "Phone").put("videoRotation", true))
+                assertTrue(expect(Type.HELLO).json().getBoolean("videoRotation"))
+                control(Type.SESSION_REQUEST, StrictJson.decode(
+                    """{"video":{"codec":"h265","encoder":"","bitrate":20000000,"maxSize":1920,"maxFps":60,"displayId":0,"orientation":"0","crop":null,"codecOptions":""},"audio":{"enabled":false,"codec":"opus","encoder":"","bitrate":192000,"source":"output","codecOptions":""}}""".toByteArray()))
+                expect(Type.SESSION_ACCEPT)
+                control(Type.STREAM_CONFIG, JSONObject().put("codec", "h265").put("width", 1080).put("height", 1920)
+                    .put("csd", JSONArray().put("AAAAAQE=")), 1, 1)
+                expect(Type.STREAM_READY)
+                val expectedPts = mutableListOf<Long>()
+                for ((index, turns) in listOf(1, 2, 3, 0, 1).withIndex()) {
+                    val pts = 8_000_000_000 + index * 20_000L
+                    expectedPts += pts
+                    Wire.write(peer.outputStream, Message(Type.VIDEO_FRAME, 41, 1, 1, pts,
+                        flags = (turns shl 1) or if (index == 0) 1 else 0, payload = byteArrayOf(0, 0, 0, 1, 1)))
+                    await { rotations.size > index || errors.isNotEmpty() }
+                    assertTrue(errors.toString(), errors.isEmpty())
+                }
+                assertEquals(listOf(90, 180, 270, 0, 90), rotations.toList())
+                assertEquals(1, sizes.get())
+                assertEquals(1, decoders.size)
+                assertEquals(expectedPts, decoders.single().inputPts.toList())
+                assertFalse(decoders.single().closed)
+                control(Type.STOP, JSONObject().put("reason", "rotation test"))
+                expect(Type.SESSION_END)
+            }
+        }
+        assertTrue(decoders.single().closed)
+    }
+
     @Test fun reportedProjectorCounterIsSixtyFpsPtsPressureNotByteOrPacketCapacity() {
         val budget = PacketBudget(8 * 1024 * 1024, 250_000)
         repeat(15) { index ->

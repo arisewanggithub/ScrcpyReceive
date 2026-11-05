@@ -80,7 +80,7 @@ object Wire {
         protocolRequire(!media || length > 0, "Empty media packet")
         protocolRequire(session >= 0, "Invalid session ID")
         protocolRequire(!trackMessage || session > 0, "Track messages require a negotiated session")
-        protocolRequire(flags == 0 || (type == Type.VIDEO_FRAME && flags == 1), "Reserved message flags")
+        protocolRequire(flags == 0 || (type == Type.VIDEO_FRAME && flags in 1..7), "Reserved message flags")
         protocolRequire(if (trackMessage) track in 1..2 && generation in 1..Int.MAX_VALUE.toLong() else track == 0 && generation == 0L, "Invalid track/generation")
         protocolRequire(type != Type.VIDEO_FRAME || track == 1, "Video on non-video track")
         protocolRequire(type != Type.AUDIO_PACKET || track == 2, "Audio on non-audio track")

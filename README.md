@@ -5,6 +5,18 @@ on a trusted family LAN. **Custom TCP** is the only supported media transport,
 using MediaCodec and AudioTrack directly.
 These are independent applications, not official scrcpy applications.
 
+Updated senders can negotiate `videoRotation` to keep their encoded natural
+raster fixed while this receiver rotates decoded pictures for display. Phone
+rotation then needs no encoder/decoder restart. Legacy senders remain supported;
+update both apps to use this feature.
+Video is GPU-composited through TextureView so rotation affects the actual
+decoded image, including on phones whose SurfaceView layer ignores View rotation.
+No CPU pixel readback is used; screenshot protection remains enabled.
+For this negotiated mode, Automatic receiver orientation follows the displayed
+video's portrait/landscape aspect, rather than leaving landscape video inside a
+portrait Activity. Explicit receiver orientation overrides still take precedence;
+the previous Activity orientation is restored when the session ends.
+
 The Android app and release download are named **ScrcpyReceive** and
 **ScrcpyReceive.apk**; its application ID remains `org.screencopy.receiver`.
 The repository is [ScrcpyReceive](https://github.com/arisewanggithub/ScrcpyReceive). Releases publish only

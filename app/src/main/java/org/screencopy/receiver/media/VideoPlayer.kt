@@ -15,26 +15,31 @@ class VideoPlayer private constructor(
     onPresented: () -> Unit,
     factory: (VideoFormat, () -> Unit) -> VideoDecoder,
     private val generation: Long,
-    private val onPresentation: (VideoDiagnostic) -> Unit
+    private val onPresentation: (VideoDiagnostic) -> Unit,
+    private val onRotation: (Int) -> Unit
 ) : TrackWorker("ScreenCopy-video", 8 * 1024 * 1024, failure, track = 1) {
     constructor(format: VideoFormat, surface: Surface, clock: PlaybackClock, report: (String) -> Unit,
-        failure: (String, String) -> Unit, onPresented: () -> Unit = {}, generation: Long = 1) :
+        failure: (String, String) -> Unit, onPresented: () -> Unit = {}, generation: Long = 1,
+        onRotation: (Int) -> Unit = {}) :
         this(format, clock, report, failure, onPresented, { selected, presented -> AndroidVideoDecoder(selected, surface, presented) },
-            generation, { android.util.Log.i("ScreenCopyReceiver", "event=VIDEO_PRESENTATION ${it.logMessage()}") })
+            generation, { android.util.Log.i("ScreenCopyReceiver", "event=VIDEO_PRESENTATION ${it.logMessage()}") }, onRotation)
 
     internal constructor(format: VideoFormat, clock: PlaybackClock, failure: (String, String) -> Unit, decoder: VideoDecoder,
-        generation: Long = 1, onPresentation: (VideoDiagnostic) -> Unit = {}) :
-        this(format, clock, {}, failure, {}, { _, _ -> decoder }, generation, onPresentation)
+        generation: Long = 1, onPresentation: (VideoDiagnostic) -> Unit = {}, onRotation: (Int) -> Unit = {}) :
+        this(format, clock, {}, failure, {}, { _, _ -> decoder }, generation, onPresentation, onRotation)
 
     internal constructor(format: VideoFormat, clock: PlaybackClock, failure: (String, String) -> Unit,
         factory: (VideoFormat, () -> Unit) -> VideoDecoder, generation: Long = 1) :
-        this(format, clock, {}, failure, {}, factory, generation, {})
+        this(format, clock, {}, failure, {}, factory, generation, {}, {})
 
     private val decoder: VideoDecoder
     private var waiting: AccessUnit? = null
     private var firstKeyFrame = false
     private var heldOutput = -1
     private var heldPtsUs = 0L
+    private var heldRotation = 0
+    private var presentedRotation = -1
+    private val rotations = VideoRotationTimeline()
     private var heldAtNs = 0L
     private var waitingAtNs = 0L
     private var stage = VideoStage.SELECT
@@ -86,6 +91,10 @@ class VideoPlayer private constructor(
             delayUs = clock.delayUs(heldPtsUs)
             if (delayUs?.let { it < -250_000 } == true) lateRendered++
             stage = VideoStage.OUTPUT_RELEASE
+            if (presentedRotation != heldRotation) {
+                onRotation(heldRotation)
+                presentedRotation = heldRotation
+            }
             decoder.releaseOutput(heldOutput, clock.monotonicNs())
             renderSubmitted++
             heldOutput = -1
@@ -117,6 +126,7 @@ class VideoPlayer private constructor(
                 clock.anchorVideo(packet.ptsUs)
                 stage = VideoStage.INPUT_QUEUE
                 decoder.queueInput(index, packet.bytes.size, packet.ptsUs, packet.keyFrame)
+                rotations.offer(packet.ptsUs, packet.rotation)
                 lastInputPtsUs = packet.ptsUs
                 queuedFrames++
                 if (pendingOutputAtNs == null && lastOutputPtsUs?.let { packet.ptsUs > it } != false)
@@ -160,6 +170,7 @@ class VideoPlayer private constructor(
     private fun hold(output: VideoOutput) {
         heldOutput = output.index
         heldPtsUs = output.ptsUs
+        heldRotation = rotations.at(output.ptsUs)
         heldAtNs = clock.monotonicNs()
         outputBytes = output.size
         outputFlags = output.flags

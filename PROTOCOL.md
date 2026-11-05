@@ -70,6 +70,13 @@ individual startup phases10s overall (trickled reads do not extend); writer10s.
 
 ## Media transport
 
+An optional HELLO boolean `videoRotation` negotiates per-picture presentation
+rotation. The sender requests it with `true`; a supporting receiver echoes
+`true`. Absent/false retains legacy dimension-changing video, with zero rotation
+bits. Present non-boolean values are protocol errors. Both peers must agree
+before nonzero rotation bits are sent. Discovery and application versions do
+not imply support.
+
 This Android receiver supports custom TCP only. Omit `mediaTransport` from
 SESSION_REQUEST. Any present external transport descriptor is rejected with
 UNSUPPORTED_CONFIG before session acceptance; it never triggers fallback or
@@ -86,7 +93,7 @@ Exactly40-byte header, big endian:
 |4|u16 version **3**|
 |6|u16 type|
 |8|u32 payload length excluding header|
-|12|u32 flags:1 video keyframe, otherwise0|
+|12|u32 flags:bit0 video keyframe; negotiated bits1-2 clockwise quarter-turns|
 |16|u64 session, positive signed64 range;0 before SESSION_REQUEST|
 |24|u32 track0 control,1 video,2 audio|
 |28|u32 generation,1..2147483647 on track messages,0 control|
@@ -98,7 +105,20 @@ Types:1 HELLO, **2 reserved/reject**,3 SESSION_REQUEST,4 SESSION_ACCEPT,5 REJECT
 sender sends REQUEST/CONFIG/media, receiver sends ACCEPT/REJECT/READY; other
 status/liveness/stop messages bidirectional. Only CONFIG/READY/media have
 nonzero track/generation AND require session>0. Video track1; audio track2.
-Media PTS>=0, config/control PTS-1. Keyframe flag only VIDEO_FRAME. Validate
+Media PTS>=0, config/control PTS-1. Flags are zero except on VIDEO_FRAME:
+bit0 indicates keyframe; with negotiated `videoRotation`, bits1-2 encode
+0/90/180/270 degrees clockwise (`flags >> 1` times 90). All other bits are
+reserved. Without negotiation rotation bits must be zero. Rotation belongs
+to that encoded picture's PTS, not control arrival time. Decode the same coded
+width/height/CSD and rotate only when presenting that decoded picture, including
+latest-picture catch-up. Rotation alone does not change generation or require
+STREAM_CONFIG/STREAM_READY. Natural-coordinate crops and encoded dimensions
+remain fixed; manual capture-orientation overrides become presentation rotation.
+For negotiated sessions, receiverOrientation `auto` follows the displayed video
+aspect (coded dimensions plus picture rotation). Explicit portrait/landscape
+still wins. Legacy sessions retain OS-policy Auto behavior. This is scoped to
+the receiver Activity; teardown restores the previous orientation policy.
+Validate
 header fields and bounds BEFORE allocation: controls/config<=65536, video<=4194304,
 audio<=262144; no zero-length media. Unknown version/type/flags/invalid track
 fatal. Exact reads across segmentation, preserve coalesced frames. EOF partway

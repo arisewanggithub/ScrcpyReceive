@@ -1,6 +1,6 @@
 package org.screencopy.receiver
 
-import android.view.SurfaceView
+import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
 import androidx.test.core.app.ActivityScenario
@@ -64,6 +64,7 @@ class ActivityLifecycleTest {
         assertTrue("An awake unlocked display is required", power.isInteractive && !keyguard.isKeyguardLocked)
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             awaitSurfaceAndListener(scenario, ReceiverServer.PORT)
+            InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_DPAD_DOWN)
             scenario.onActivity { activity ->
                 val exit = activity.findViewById<android.widget.Button>(R.id.exit_receiver)
                 exit.requestFocus()
@@ -72,8 +73,8 @@ class ActivityLifecycleTest {
                 exit.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_DPAD_CENTER))
                 assertTrue(activity.isFinishing)
                 assertEquals(0, activity.window.attributes.flags and android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                val surface = activity.findViewById<SurfaceView>(R.id.video_surface)
-                activity.surfaceCreated(surface.holder)
+                val surface = activity.findViewById<TextureView>(R.id.video_surface)
+                activity.onSurfaceTextureAvailable(checkNotNull(surface.surfaceTexture), surface.width, surface.height)
             }
         }
         ReceiverWork.executor.submit {}.get(5, TimeUnit.SECONDS)
@@ -93,7 +94,7 @@ class ActivityLifecycleTest {
         while (!ready.get() && System.nanoTime() < deadline) {
             scenario.onActivity { activity ->
                 val content = activity.findViewById<ViewGroup>(android.R.id.content)
-                ready.set(findSurface(content)?.holder?.surface?.isValid == true)
+                ready.set(findSurface(content)?.isAvailable == true)
             }
             if (!ready.get()) Thread.sleep(10)
         }
@@ -102,8 +103,8 @@ class ActivityLifecycleTest {
         Socket().use { probe -> probe.connect(InetSocketAddress("127.0.0.1", port), 1000) }
     }
 
-    private fun findSurface(view: View): SurfaceView? {
-        if (view is SurfaceView) return view
+    private fun findSurface(view: View): TextureView? {
+        if (view is TextureView) return view
         if (view is ViewGroup) {
             for (index in 0 until view.childCount) {
                 findSurface(view.getChildAt(index))?.let { return it }

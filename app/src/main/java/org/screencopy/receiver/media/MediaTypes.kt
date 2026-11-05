@@ -18,7 +18,7 @@ data class AudioFormat(
     val outputGainQ8: Int = 0
 )
 
-data class AccessUnit(val ptsUs: Long, val bytes: ByteArray, val keyFrame: Boolean = false)
+data class AccessUnit(val ptsUs: Long, val bytes: ByteArray, val keyFrame: Boolean = false, val rotation: Int = 0)
 
 open class PlaybackException(message: String, val code: String = "DECODER_FAILED") : IllegalStateException(message)
 

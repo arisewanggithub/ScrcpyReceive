@@ -1,5 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
+        <activity android:name="org.screencopy.receiver.TextureRotationProbeActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout" />
         <activity android:name="dev.scrcpy.update.UpdateTestActivity"
             android:exported="false"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />

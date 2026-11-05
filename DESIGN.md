@@ -25,7 +25,7 @@ clients on an untrusted network.
 
 ```text
 wire protocol version 3 listener / bounded framing / explicit stream configuration and readiness
-  -> video generation queue -> MediaCodec -> Surface
+  -> video generation queue -> MediaCodec -> SurfaceTexture -> TextureView GPU composition
   -> audio generation queue -> Opus/AAC/PCM decode -> 50-ms decoded FIFO -> AudioTrack
   -> source-only audio presentation clock / immediate latest decoded video
 ```
@@ -58,12 +58,34 @@ The optional session `receiverOrientation` is exactly auto/landscape/portrait.
 It changes Activity presentation only, never capture geometry, packet metadata,
 timestamps or generations. Auto retains OS policy; forced axes are requested
 once after readiness, with the exact prior policy restored on owned teardown.
+For negotiated `videoRotation` sessions, Auto instead follows the displayed
+video aspect (coded dimensions plus per-picture rotation), requesting a portrait
+or landscape Activity window. Forced receiver axes still take precedence.
+Legacy sessions keep the previous OS-policy behavior. Content-follow requests
+are coalesced by axis and never change global sensor/rotation-lock settings.
 Large-screen, multi-window and fixed-orientation policies may ignore it.
 
 Handled orientation/size changes refresh the waiting subtree/insets while
 retaining valid Surface/session resources. Actual Surface loss, background
 exit or unrelated Activity recreation still uses normal owned teardown.
 No invalid Surface is ignored to preserve a cast.
+
+HELLO can negotiate `videoRotation`. Supporting senders retain a fixed natural
+video raster and attach clockwise quarter-turn metadata to each VIDEO_FRAME.
+The decoder input ledger associates that metadata with decoded PTS; catch-up
+uses the selected picture's rotation. TextureView presentation rotates and
+aspect-fits the decoded image without recreating the Activity, decoder, Surface
+or audio pipeline. Legacy peers keep rotation bits zero and their existing
+dimension-changing generations. Rotation metadata is bounded independently and
+does not change encoded queue/PTS limits.
+
+TextureView is required here: SurfaceView's View rotation can leave its separate
+video compositor layer unrotated on older phones. The texture is transformed as
+part of the hardware-accelerated View hierarchy, with no CPU video readback.
+This adds GPU composition compared with a direct hardware-overlay SurfaceView.
+The decoder Surface is owned for the TextureView's SurfaceTexture lifetime;
+layout/rotation changes never recreate it. Window screenshot protection remains
+enabled and is not disabled for diagnostics.
 
 ## Resource lifetime, diagnostics and privacy
 
